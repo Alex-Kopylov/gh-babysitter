@@ -77,5 +77,7 @@ CREATE TABLE subscriptions (
 
 ## Стек
 
-- Сервис: Python, FastAPI, `sse-starlette` (стрим), `httpx` (проверка токенов у GitHub API), SQLite (stdlib `sqlite3` или `aiosqlite`).
+- Сервис: Python, FastAPI, `sse-starlette` (стрим), `httpx` (проверка токенов у GitHub API), SQLite (stdlib `sqlite3` или `aiosqlite`), locust (нагрузочное тестирование).
 - CLI: Python, Typer; упаковка как gh-расширение — см. [cli](05-cli.md#дистрибуция).
+- Шаблон репозитория: `uvx copier copy gh:Alex-Kopylov/ai-ready-modern-python-template project-name`
+- LICENSE: TBD
