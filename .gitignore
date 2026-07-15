@@ -1,3 +1,4 @@
 .claude/settings.local.json
+.obsidian/
 __pycache__/
 .venv/

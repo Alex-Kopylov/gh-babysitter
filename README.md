@@ -40,6 +40,7 @@ GitHub (1 org-level webhook, статический allowlist типов соб�
 | Гарантии | At-most-once: без очереди, replay и истории | [delivery](docs/specs/02-delivery.md) |
 | Авторизация | Токен из `gh auth token`, проверка через GitHub API, без своей user base | [auth](docs/specs/03-auth.md) |
 | Конфиг вебхука | Статический allowlist типов событий, без динамической синхронизации | [github-webhook](docs/specs/04-github-webhook.md) |
+| Интеграция с GitHub | Org-webhook, а не GitHub App | [github-app (ADR)](docs/specs/06-github-app.md) |
 | CLI | gh-расширение в конвенциях `gh`, вдохновлено [cli/gh-webhook](https://github.com/cli/gh-webhook) | [cli](docs/specs/05-cli.md) |
 | Стек | Python + FastAPI + sse-starlette, CLI на Typer | [architecture](docs/specs/01-architecture.md) |
 
@@ -50,6 +51,7 @@ GitHub (1 org-level webhook, статический allowlist типов соб�
 3. [Авторизация и безопасность](docs/specs/03-auth.md) — аутентификация через `gh`, проверка доступа к репо, HMAC.
 4. [Webhook на стороне GitHub](docs/specs/04-github-webhook.md) — org-level хук, allowlist, разбор `gh-webhook`, локальная разработка.
 5. [CLI](docs/specs/05-cli.md) — команды, флаги, локальный конфиг подписок, упаковка как gh-расширение.
+6. [ADR: GitHub App](docs/specs/06-github-app.md) — почему org-webhook, а не GitHub App, и когда пересмотреть.
 
 ## Не-цели
 
@@ -64,3 +66,4 @@ GitHub (1 org-level webhook, статический allowlist типов соб�
 - Точный формат события в stdout — [черновик envelope](docs/specs/02-delivery.md#формат-события).
 - Итоговое меню поддерживаемых типов событий — [черновик allowlist](docs/specs/04-github-webhook.md#статический-allowlist).
 - Значение TTL lease (порядок — минуты).
+- Упаковывать ли серверный процесс в то же gh-расширение (`gh babysitter serve`) — см. [ADR по GitHub App](docs/specs/06-github-app.md#что-из-предложения-принято).
