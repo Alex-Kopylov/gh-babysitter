@@ -5,9 +5,9 @@
 ## Компоненты
 
 - **Ingress** — единственный `POST /webhook`, на который настроен org-level webhook GitHub (см. [github-webhook](04-github-webhook.md)). Проверяет HMAC-подпись `X-Hub-Signature-256` (см. [auth](03-auth.md#вход-от-github-hmac)), нормализует payload и передаёт событие дальше.
-- **Matcher** — по нормализованному событию находит все подходящие подписки в SQLite. На целевом масштабе это микросекунды, никакой rule engine не нужен.
+- **Matcher** — по нормализованному событию находит все подходящие подписки в реестре в памяти. На целевом масштабе это микросекунды, никакой rule engine не нужен.
 - **Dispatcher** — fan-out: пересекает совпавшие подписки с множеством открытых SSE-соединений и пушит событие каждому. Семантика доставки — в [delivery](02-delivery.md).
-- **Control plane** — CRUD подписок и стрим-endpoint, авторизация через GitHub-токен пользователя (см. [auth](03-auth.md)). Потребитель — [CLI](05-cli.md).
+- **Control plane** — единственный стрим-endpoint: подписки объявляются параметрами подключения, авторизация через GitHub-токен пользователя (см. [auth](03-auth.md)). Потребитель — [CLI](05-cli.md).
 
 ## Поток события
 
@@ -34,50 +34,42 @@
 
 ## Модель данных
 
-Единственная таблица — весь state сервиса:
+Персистентного состояния нет вообще. Подписка — атрибут открытого SSE-соединения; реестр живёт в памяти процесса:
 
-```sql
-CREATE TABLE subscriptions (
-  id            INTEGER PRIMARY KEY,
-  github_login  TEXT      NOT NULL,  -- владелец подписки
-  repo          TEXT      NOT NULL,  -- 'org/name'
-  event         TEXT      NOT NULL,  -- 'issues', 'pull_request', ...
-  action        TEXT,                -- NULL = любой ('opened', 'closed', ...)
-  number        INTEGER,             -- NULL = все, иначе конкретный issue/PR
-  expires_at    TIMESTAMP NOT NULL   -- lease, см. delivery
-);
 ```
+Filter = (repo, event, action | NULL, number | NULL)  # что клиент объявил при подключении
+
+connections: conn_id → (github_login, [Filter, ...])  # владелец соединения и его фильтры
+index:       (repo, event) → {conn_id, ...}           # обратный индекс для матчинга
+```
+
+Соединение закрылось → записи удалены. Процесс перезапустился → соединения умерли вместе с ним, и реестр пуст по построению: восстанавливать нечего, клиенты переподключатся и переобъявятся сами ([delivery](02-delivery.md#жизненный-цикл-подписки)).
 
 Примеры из постановки задачи:
 
-| Хочу | Строка |
+| Хочу | Фильтр |
 |---|---|
-| Все issues в `org/api` | `(login, 'org/api', 'issues', NULL, NULL)` |
-| Все PR в `org/web` | `(login, 'org/web', 'pull_request', NULL, NULL)` |
-| Только issue #42 | `(login, 'org/api', 'issues', NULL, 42)` |
-| Только PR #24 | `(login, 'org/api', 'pull_request', NULL, 24)` |
-
-Семантика `expires_at` (короткий TTL, продление открытым соединением, фоновая чистка) описана в [delivery](02-delivery.md#lease--heartbeat).
+| Все issues в `org/api` | `('org/api', 'issues', NULL, NULL)` |
+| Все PR в `org/web` | `('org/web', 'pull_request', NULL, NULL)` |
+| Только issue #42 | `('org/api', 'issues', NULL, 42)` |
+| Только PR #24 | `('org/api', 'pull_request', NULL, 24)` |
 
 ## API
 
 | Метод и путь | Кто зовёт | Назначение |
 |---|---|---|
 | `POST /webhook` | GitHub | Приём событий, HMAC |
-| `POST /subscriptions` | CLI | Создать подписку (идемпотентный upsert) |
-| `GET /subscriptions` | CLI | Мои подписки |
-| `DELETE /subscriptions/{id}` | CLI | Удалить подписку |
-| `GET /events/stream` | CLI | SSE-поток событий по моим подпискам |
+| `GET /events/stream?repo=&events=&number=&action=` | CLI | Объявить подписки и получать SSE-поток — одно действие |
 
-Все `/subscriptions*` и `/events/stream` требуют `Authorization: Bearer <gh-token>` — см. [auth](03-auth.md).
+`/events/stream` требует `Authorization: Bearer <gh-token>` — см. [auth](03-auth.md). CRUD-endpoint'ов для подписок нет: подписка неотделима от соединения, объявлять её отдельно от стрима некому и незачем.
 
 ## Масштаб и производительность
 
-Целевой масштаб: 10 репозиториев × 100 разработчиков × 5 подписок = **5000 строк**. Выборка по индексу `(repo, event)` — микросекунды на событие. Тысячи одновременных висящих SSE-соединений для одного uvicorn-процесса — не нагрузка. Узких мест на этом масштабе нет, поэтому: один процесс, SQLite, без очередей и внешних зависимостей.
+Целевой масштаб: 10 репозиториев × 100 разработчиков × 5 подписок = **5000 фильтров** в памяти. Выборка по dict-индексу `(repo, event)` — микросекунды на событие. Тысячи одновременных висящих SSE-соединений для одного uvicorn-процесса — не нагрузка. Узких мест на этом масштабе нет, поэтому: один процесс, всё в памяти, без БД, очередей и внешних зависимостей.
 
 ## Стек
 
-- Сервис: Python, FastAPI, `sse-starlette` (стрим), `httpx` (проверка токенов у GitHub API), SQLite (stdlib `sqlite3` или `aiosqlite`), locust (нагрузочное тестирование).
+- Сервис: Python, FastAPI, `sse-starlette` (стрим), `httpx` (проверка токенов у GitHub API), locust (нагрузочное тестирование). БД нет — реестр подписок в памяти ([модель данных](#модель-данных)).
 - CLI: Python, Typer; упаковка как gh-расширение — см. [cli](05-cli.md#дистрибуция).
 - Шаблон репозитория: `uvx copier copy gh:Alex-Kopylov/ai-ready-modern-python-template project-name`
 - LICENSE: TBD
