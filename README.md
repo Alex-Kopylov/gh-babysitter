@@ -19,24 +19,27 @@ GitHub (1 org-level webhook, статический allowlist типов соб�
 ┌─────────────────── FastAPI, один процесс ───────────────────┐
 │  Ingress ── verify HMAC ── normalize(event, action, number) │
 │     │                                                        │
-│  Matcher ── SELECT по subscriptions (SQLite)                 │
-│     │           ∩ кто сейчас подключён                       │
+│  Matcher ── реестр подписок в памяти                         │
+│     │           (= открытые SSE-соединения)                  │
 │  Dispatcher ── push в открытые SSE-соединения                │
 └──────────────────────────────────────────────────────────────┘
-   ▲ subscribe / list / unsubscribe      ▼ GET /events/stream (SSE)
+   ▲▼ GET /events/stream — подписки в параметрах запроса (SSE)
    └────────── CLI (gh-расширение), auth = gh auth token ──────┘
 ```
 
-События нигде не хранятся: пришло → сматчилось → ушло в открытые соединения → забыто. Единственный state — таблица подписок.
+События нигде не хранятся: пришло → сматчилось → ушло в открытые соединения → забыто. Подписки тоже: они атрибут открытого соединения, живут в памяти и умирают вместе с ним — персистентного состояния у системы нет вообще, ни на сервере, ни у клиента.
 
 **Не слушаешь — не получаешь.** Это принцип дизайна, а не ограничение: сервис доставляет события только клиентам с открытым соединением. It's not a bug, it's a feature.
+
+**Целевой пользователь — AI-агент.** Claude Code / Codex CLI по запросу «babysit this PR» запускает `gh babysitter listen -R org/web -n 24 --until merged --timeout 12h`, блокируется до результата и выходит; Ctrl+C или конец сессии агента = отписка. Отсюда эфемерная модель подписок и exit-условия — [cli](docs/specs/05-cli.md).
 
 ## Ключевые решения
 
 | Область | Решение | Спека |
 |---|---|---|
+| Целевой пользователь | AI-агент: эфемерные подписки (argv процесса `listen`), exit-условия `--until`/`--timeout` | [cli](docs/specs/05-cli.md) |
 | Доставка | SSE-поток в CLI (`listen`), stdout JSON lines | [delivery](docs/specs/02-delivery.md) |
-| Состояние | SQLite, одна таблица подписок с коротким lease | [architecture](docs/specs/01-architecture.md), [delivery](docs/specs/02-delivery.md) |
+| Состояние | Никакого: подписки в памяти процесса, время жизни = SSE-соединение | [architecture](docs/specs/01-architecture.md), [delivery](docs/specs/02-delivery.md) |
 | Гарантии | At-most-once: без очереди, replay и истории | [delivery](docs/specs/02-delivery.md) |
 | Авторизация | Токен из `gh auth token`, проверка через GitHub API, без своей user base | [auth](docs/specs/03-auth.md) |
 | Конфиг вебхука | Статический allowlist типов событий, без динамической синхронизации | [github-webhook](docs/specs/04-github-webhook.md) |
@@ -47,16 +50,17 @@ GitHub (1 org-level webhook, статический allowlist типов соб�
 ## Документация
 
 1. [Архитектура и модель данных](docs/specs/01-architecture.md) — компоненты, поток события, нормализация payload, матчинг, API.
-2. [Доставка событий](docs/specs/02-delivery.md) — SSE, семантика lease/heartbeat, формат события, at-most-once.
+2. [Доставка событий](docs/specs/02-delivery.md) — SSE, жизненный цикл подписки (= соединение), формат события, at-most-once.
 3. [Авторизация и безопасность](docs/specs/03-auth.md) — аутентификация через `gh`, проверка доступа к репо, HMAC.
 4. [Webhook на стороне GitHub](docs/specs/04-github-webhook.md) — org-level хук, allowlist, разбор `gh-webhook`, локальная разработка.
-5. [CLI](docs/specs/05-cli.md) — команды, флаги, локальный конфиг подписок, упаковка как gh-расширение.
+5. [CLI](docs/specs/05-cli.md) — `listen`, exit-условия, эфемерная модель подписок, упаковка как gh-расширение.
 6. [ADR: GitHub App](docs/specs/06-github-app.md) — почему org-webhook, а не GitHub App, и когда пересмотреть.
 
 ## Не-цели
 
 - **Гарантированная доставка**: нет очереди, нет replay, офлайн-клиент пропускает события.
 - **Горизонтальное масштабирование**: один процесс, вертикальный рост. Тысяча висящих SSE-соединений — не нагрузка.
+- **Персистентные подписки**: что слушать, знает только живой процесс `listen` — ни конфиг-файлов, ни серверного списка подписок, ни «памяти между сессиями».
 - **Собственный user management**: GitHub — единственный источник истины о пользователях и правах.
 - **Веб-интерфейс**: вся конфигурация из консоли, браузер не нужен ни для чего.
 
@@ -65,5 +69,6 @@ GitHub (1 org-level webhook, статический allowlist типов соб�
 - Итоговое имя проекта и команда CLI (рабочее: `gh babysitter ...`).
 - Точный формат события в stdout — [черновик envelope](docs/specs/02-delivery.md#формат-события).
 - Итоговое меню поддерживаемых типов событий — [черновик allowlist](docs/specs/04-github-webhook.md#статический-allowlist).
-- Значение TTL lease (порядок — минуты).
+- Матрица `--until` и коды выхода `listen` — [черновик](docs/specs/05-cli.md#exit-условия).
+- Период серверной перепроверки прав для долгоживущих соединений (порядок — минуты).
 - Упаковывать ли серверный процесс в то же gh-расширение (`gh babysitter serve`) — см. [ADR по GitHub App](docs/specs/06-github-app.md#что-из-предложения-принято).
