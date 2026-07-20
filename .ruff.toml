@@ -12,7 +12,7 @@ select = [
   "F",
   "I",
   "B",
-  "C901",
+  "complex-structure",
   "PLR",  # All Pylint Refactor rules (single source of truth for hook)
   "FAST", # FastAPI best practices
   # Modernization categories for Python 3.11+ syntax
@@ -38,8 +38,8 @@ select = [
   "ARG",  # flake8-unused-arguments
   "PLC",  # Pylint Convention
   "PLE",  # Pylint Error
-  "PGH003",  # pygrep-hooks - blanket type: ignore detection
-  "PGH004",  # pygrep-hooks - enforce specific rule codes in noqa
+  "blanket-type-ignore",  # pygrep-hooks - blanket type: ignore detection
+  "blanket-noqa",  # pygrep-hooks - enforce specific rule codes in noqa
   "PLW",  # Pylint Warning
   # Testing category
   "PT",   # flake8-pytest-style - pytest best practices
@@ -56,7 +56,7 @@ select = [
   "INP",   # flake8-no-pep420 - implicit namespace package detection
 ]
 ignore = [
-  "PLC0415",  # import-outside-top-level - intentional pattern for:
+  "import-outside-top-level",  # import-outside-top-level - intentional pattern for:
               # - Circular import avoidance
               # - Pydantic validator optimization
               # - Lazy loading for optional dependencies
@@ -81,9 +81,9 @@ known-first-party = ["gh_babysitter"]
 # PT (flake8-pytest-style) rules are pytest-specific - only apply to test files
 "!tests/**/*" = ["PT"]
 # Test files: D103 exempt (test function names ARE documentation)
-"tests/**/test_*.py" = ["D103", "E", "F", "B", "C901", "PLR", "S", "TC", "N", "ARG", "RUF029", "ERA001", "PLC", "SIM", "TRY", "RET", "RUF", "PLW", "UP", "PERF", "FURB"]
-"tests/**/conftest.py" = ["S", "N", "ARG", "PLC2701", "PLC0415", "SIM", "TRY", "RET", "RUF", "PLW", "TC", "UP", "PERF", "FURB", "E", "G"]
-"tests/constants.py" = ["D", "ERA001"]
+"tests/**/test_*.py" = ["undocumented-public-function", "E", "F", "B", "complex-structure", "PLR", "S", "TC", "N", "ARG", "unused-async", "commented-out-code", "PLC", "SIM", "TRY", "RET", "RUF", "PLW", "UP", "PERF", "FURB"]
+"tests/**/conftest.py" = ["S", "N", "ARG", "import-private-name", "import-outside-top-level", "SIM", "TRY", "RET", "RUF", "PLW", "TC", "UP", "PERF", "FURB", "E", "G"]
+"tests/constants.py" = ["D", "commented-out-code"]
 
 
 [lint.flake8-pytest-style]
