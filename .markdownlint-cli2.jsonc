@@ -19,7 +19,7 @@
     "CHANGELOG.md"
   ],
 
-  // Exclusions (AI agent working files, working documents, build artifacts)
+  // Spec-era documents authored before the template conventions; new markdown elsewhere stays linted.
   "ignores": [
     "CLAUDE.md",
     "AGENTS.md",
@@ -29,11 +29,13 @@
     ".cursor/**",
     ".gemini/**",
     ".venv/**",
+    "README.md",
     "goals/**",
     "node_modules/**",
     "build/**",
     "dist/**",
     "docs/specs/**",
+    "docs/plans/**",
     "docs/internal/**"
   ]
 }
