@@ -116,6 +116,7 @@ async def _listen(
     server_client: httpx.AsyncClient,
     github_client: httpx.AsyncClient | None,
 ) -> int:
+    await asyncio.sleep(0)
     if (
         options.until is not None
         and github_client is not None
@@ -160,6 +161,7 @@ async def listen(
     client_factory: Callable[..., httpx.AsyncClient] = httpx.AsyncClient,
 ) -> int:
     """Listen for matching server events until an exit condition is met."""
+    await asyncio.sleep(0)
     events, count = _validated(options)
     token = resolve_token()
     server_headers = {"Authorization": f"Bearer {token}", "Accept": "text/event-stream"}

@@ -4,3 +4,5 @@
 
 # Only enable Pydantic and Async rules (other linting via ruff)
 select = PYD,ASYNC
+# httpx is pinned by docs/specs/01-architecture.md; migration to httpx2 blocked on respx support.
+disable = ASYNC127

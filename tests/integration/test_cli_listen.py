@@ -12,21 +12,23 @@ import respx
 
 from gh_babysitter.cli import listen
 from gh_babysitter.server.app import create_app
+from gh_babysitter.server.auth import Authenticator
 from gh_babysitter.server.config import Settings
 from gh_babysitter.server.registry import Registry
 
 
 class _FakeAuthenticator:
-    def __init__(self):
+    def __init__(self) -> None:
         self.revoked = False
 
-    async def verify(self, token, repo, *, fresh=False):
+    async def verify(self, token: str, repo: str, *, fresh: bool = False) -> str | None:
+        await anyio.lowlevel.checkpoint()
         if token == "token" and repo == "octo/repo" and not self.revoked:
             return "octocat"
         return None
 
 
-def make_app(registry, authenticator):
+def make_app(registry: Registry, authenticator: Authenticator):
     return create_app(
         Settings(webhook_secret="secret", recheck_interval=0.01, ping_interval=60),
         registry=registry,
@@ -42,9 +44,10 @@ def client_factory(app):
     return make
 
 
-async def wait_until_registered(registry):
+async def wait_until_registered(registry: Registry) -> None:
     with anyio.fail_after(1):
-        while not registry.connections:
+        await anyio.lowlevel.checkpoint()
+        while not registry.connections:  # noqa: ASYNC110 - Registry has no notification hook.
             await anyio.lowlevel.checkpoint()
 
 

@@ -8,7 +8,9 @@ if TYPE_CHECKING:
     from collections.abc import AsyncIterable, AsyncIterator
 
 
-async def parse_sse(lines: AsyncIterable[bytes | str]) -> AsyncIterator[tuple[str, str]]:
+async def parse_sse(  # noqa: ASYNC900 - SSE parsing intentionally streams results.
+    lines: AsyncIterable[bytes | str],
+) -> AsyncIterator[tuple[str, str]]:
     """Yield event type and joined data from an asynchronous line stream."""
     event_type = "message"
     data: list[str] = []

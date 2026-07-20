@@ -1,11 +1,14 @@
 """Tests for the minimal SSE parser."""
 
+from unittest.mock import AsyncMock
+
 from gh_babysitter.cli.sse import parse_sse
 
 
-async def byte_lines(*lines):
-    for line in lines:
-        yield line
+def byte_lines(*lines):
+    iterable = AsyncMock()
+    iterable.__aiter__.return_value = iter(lines)
+    return iterable
 
 
 async def test_parse_sse_joins_multiline_data_and_uses_event_type():

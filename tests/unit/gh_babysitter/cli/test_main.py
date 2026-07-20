@@ -2,6 +2,7 @@
 
 import tomllib
 from pathlib import Path
+from unittest.mock import AsyncMock
 
 from typer.testing import CliRunner
 
@@ -20,12 +21,7 @@ def test_app_exposes_all_commands():
 
 def test_listen_command_maps_flags_and_returns_core_exit_code(monkeypatch):
     captured = []
-
-    async def fake_listen(options):
-        captured.append(options)
-        return 124
-
-    monkeypatch.setattr(main, "listen", fake_listen)
+    monkeypatch.setattr(main, "listen", AsyncMock(side_effect=lambda options: captured.append(options) or 124))
 
     result = runner.invoke(
         main.app,
@@ -70,12 +66,7 @@ def test_listen_command_maps_flags_and_returns_core_exit_code(monkeypatch):
 
 def test_listen_command_reads_server_from_environment(monkeypatch):
     captured = []
-
-    async def fake_listen(options):
-        captured.append(options)
-        return 0
-
-    monkeypatch.setattr(main, "listen", fake_listen)
+    monkeypatch.setattr(main, "listen", AsyncMock(side_effect=lambda options: captured.append(options) or 0))
 
     result = runner.invoke(
         main.app,
@@ -101,11 +92,7 @@ def test_listen_command_reports_invalid_duration_as_usage_error():
 def test_setup_and_serve_commands_delegate(monkeypatch):
     setup_calls = []
     serve_calls = []
-
-    async def fake_setup_webhook(**kwargs):
-        setup_calls.append(kwargs)
-
-    monkeypatch.setattr(main, "setup_webhook", fake_setup_webhook)
+    monkeypatch.setattr(main, "setup_webhook", AsyncMock(side_effect=lambda **kwargs: setup_calls.append(kwargs)))
     monkeypatch.setattr(main, "run_server", lambda host, port: serve_calls.append((host, port)))
 
     setup_result = runner.invoke(
