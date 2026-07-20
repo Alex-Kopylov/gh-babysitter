@@ -47,4 +47,4 @@ def test_settings_are_frozen():
     settings = Settings(webhook_secret=None)
 
     with pytest.raises(FrozenInstanceError):
-        settings.queue_maxsize = 1
+        setattr(settings, "queue_maxsize", 1)

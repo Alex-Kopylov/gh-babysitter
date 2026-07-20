@@ -10,23 +10,30 @@ import anyio.lowlevel
 import httpx
 
 from gh_babysitter.server.app import create_app
+from gh_babysitter.server.auth import Authenticator
 from gh_babysitter.server.config import Settings
 from gh_babysitter.server.registry import Filter, Registry
 
 
 class _FakeAuthenticator:
-    def __init__(self):
+    def __init__(self) -> None:
         self.revoked = False
-        self.calls = []
+        self.calls: list[tuple[str, str, bool]] = []
 
-    async def verify(self, token, repo, *, fresh=False):
+    async def verify(self, token: str, repo: str, *, fresh: bool = False) -> str | None:
+        await anyio.lowlevel.checkpoint()
         self.calls.append((token, repo, fresh))
         if token != "token" or repo != "octo/repo" or self.revoked:
             return None
         return "octocat"
 
 
-def make_client(*, registry=None, authenticator=None, recheck_interval=0.02):
+def make_client(
+    *,
+    registry: Registry | None = None,
+    authenticator: Authenticator | None = None,
+    recheck_interval: float = 0.02,
+) -> httpx.AsyncClient:
     settings = Settings(
         webhook_secret="secret",
         recheck_interval=recheck_interval,
@@ -46,13 +53,14 @@ def webhook_headers(body, event="issues", *, valid=True):
     }
 
 
-async def wait_until_registered(registry):
+async def wait_until_registered(registry: Registry) -> None:
     with anyio.fail_after(1):
-        while not registry.connections:
+        await anyio.lowlevel.checkpoint()
+        while not registry.connections:  # noqa: ASYNC110 - Registry has no notification hook.
             await anyio.lowlevel.checkpoint()
 
 
-def sse_data(response):
+def sse_data(response: httpx.Response):
     return [json.loads(line.removeprefix("data: ")) for line in response.text.splitlines() if line.startswith("data: ")]
 
 
@@ -170,7 +178,7 @@ async def test_stream_rejects_bad_events_and_repository_names():
 async def test_webhook_to_sse_respects_action_and_number_filters():
     registry = Registry()
     authenticator = _FakeAuthenticator()
-    response = None
+    response: httpx.Response | None = None
 
     async def consume(client):
         nonlocal response
@@ -206,6 +214,7 @@ async def test_webhook_to_sse_respects_action_and_number_filters():
             assert delivery.json() == {"matched": matched}
         authenticator.revoked = True
 
+    assert response is not None
     assert response.status_code == 200
     messages = sse_data(response)
     assert messages[0]["filters"] == [
@@ -222,7 +231,7 @@ async def test_webhook_to_sse_respects_action_and_number_filters():
 async def test_overlapping_stream_filters_receive_one_delivery():
     registry = Registry()
     authenticator = _FakeAuthenticator()
-    response = None
+    response: httpx.Response | None = None
 
     async def consume(client):
         nonlocal response
@@ -247,13 +256,14 @@ async def test_overlapping_stream_filters_receive_one_delivery():
         await client.post("/webhook", content=body, headers=webhook_headers(body))
         authenticator.revoked = True
 
+    assert response is not None
     assert len(sse_data(response)[1:]) == 1
 
 
 async def test_recheck_closes_stream_after_access_revocation():
     registry = Registry()
     authenticator = _FakeAuthenticator()
-    response = None
+    response: httpx.Response | None = None
 
     async def consume(client):
         nonlocal response
@@ -271,6 +281,7 @@ async def test_recheck_closes_stream_after_access_revocation():
         await wait_until_registered(registry)
         authenticator.revoked = True
 
+    assert response is not None
     assert response.status_code == 200
     assert sse_data(response) == [
         {

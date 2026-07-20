@@ -1,9 +1,19 @@
 """GitHub token and repository access verification."""
 
+import asyncio
 import hashlib
 from time import monotonic
+from typing import Protocol
 
 import httpx
+
+
+class Authenticator(Protocol):
+    """Repository-access verifier accepted by the server app."""
+
+    async def verify(self, token: str, repo: str, *, fresh: bool = False) -> str | None:
+        """Return the token login when it can read the repository."""
+        ...
 
 
 class GitHubAuthenticator:
@@ -18,6 +28,7 @@ class GitHubAuthenticator:
 
     async def verify(self, token: str, repo: str, *, fresh: bool = False) -> str | None:
         """Return the token login when it can read the repository."""
+        await asyncio.sleep(0)
         token_hash = hashlib.sha256(token.encode()).hexdigest()
         key = (token_hash, repo)
         cached = self._cache.get(key)

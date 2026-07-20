@@ -37,13 +37,19 @@ def test_issue_comment_on_pull_request_uses_issue_number():
         "issue": {"number": 42, "pull_request": {"url": "https://example.test"}},
     }
 
-    assert normalize("issue_comment", payload).number == 42
+    normalized = normalize("issue_comment", payload)
+
+    assert normalized is not None
+    assert normalized.number == 42
 
 
 def test_missing_action_is_preserved_as_none():
     payload = {"repository": {"full_name": "octo/repo"}, "release": {}}
 
-    assert normalize("release", payload).action is None
+    normalized = normalize("release", payload)
+
+    assert normalized is not None
+    assert normalized.action is None
 
 
 @pytest.mark.parametrize("payload", [{}, {"repository": {}}, {"repository": None}])

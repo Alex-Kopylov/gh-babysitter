@@ -14,7 +14,7 @@ from fastapi import FastAPI, HTTPException, Query, Request, Response
 from fastapi.responses import JSONResponse
 from sse_starlette.sse import EventSourceResponse
 
-from gh_babysitter.server.auth import GitHubAuthenticator
+from gh_babysitter.server.auth import Authenticator, GitHubAuthenticator
 from gh_babysitter.server.events import EVENT_MENU
 from gh_babysitter.server.normalize import normalize
 from gh_babysitter.server.registry import Filter, Registry
@@ -118,7 +118,8 @@ async def _stream(
     queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue(maxsize=settings.queue_maxsize)
     connection_id = registry.register(login, filters, queue)
 
-    async def event_generator() -> AsyncIterator[dict[str, str]]:
+    async def event_generator() -> AsyncIterator[dict[str, str]]:  # noqa: ASYNC900 - SSE requires streaming.
+        await asyncio.sleep(0)
         next_recheck = asyncio.get_running_loop().time() + settings.recheck_interval
         try:
             yield {
@@ -147,7 +148,7 @@ async def _stream(
 def create_app(
     settings: Settings,
     registry: Registry | None = None,
-    authenticator: GitHubAuthenticator | None = None,
+    authenticator: Authenticator | None = None,
 ) -> FastAPI:
     """Create the server application with optional test dependencies."""
     app = FastAPI(lifespan=_lifespan)

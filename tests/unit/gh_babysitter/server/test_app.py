@@ -2,6 +2,7 @@
 
 import pytest
 from fastapi import HTTPException
+from starlette.routing import Route
 
 from gh_babysitter.server.app import (
     _bearer_token,
@@ -51,9 +52,11 @@ def test_valid_repo_requires_owner_and_name(repo, expected):
 
 
 def test_create_app_exposes_only_server_routes():
-    app = create_app(Settings(webhook_secret="secret"), authenticator=object())
+    app = create_app(Settings(webhook_secret="secret"))
 
-    routes = {(route.path, method) for route in app.routes for method in route.methods}
+    routes = {
+        (route.path, method) for route in app.routes if isinstance(route, Route) for method in route.methods or ()
+    }
     assert ("/webhook", "POST") in routes
     assert ("/events/stream", "GET") in routes
 
