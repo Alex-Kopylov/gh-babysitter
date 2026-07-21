@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+if ! command -v uv >/dev/null 2>&1; then
+  echo "gh-babysitter requires uv; install it from https://docs.astral.sh/uv/." >&2
+  exit 1
+fi
+
+extension_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+exec uv run --directory "$extension_dir" gh-babysitter "$@"

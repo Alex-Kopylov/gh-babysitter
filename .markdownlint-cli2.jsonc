@@ -1,0 +1,41 @@
+{
+  // markdownlint-cli2 configuration
+  // Uses .markdownlint.jsonc for rules, this file for CLI options
+  // See: https://github.com/DavidAnson/markdownlint-cli2
+
+  // Suppress verbose discovery output
+  "noBanner": true,
+  "noProgress": true,
+
+  // Paths to lint
+  "globs": [
+    "*.md",
+    ".github/**/*.md",
+    "docs/**/*.md",
+    "README.md",
+    "CONTRIBUTING.md",
+    "LICENSE.md",
+    "CODE_OF_CONDUCT.md",
+    "CHANGELOG.md"
+  ],
+
+  // Spec-era documents authored before the template conventions; new markdown elsewhere stays linted.
+  "ignores": [
+    "CLAUDE.md",
+    "AGENTS.md",
+    "GEMINI.md",
+    ".claude/**",
+    ".codex/**",
+    ".cursor/**",
+    ".gemini/**",
+    ".venv/**",
+    "README.md",
+    "goals/**",
+    "node_modules/**",
+    "build/**",
+    "dist/**",
+    "docs/specs/**",
+    "docs/plans/**",
+    "docs/internal/**"
+  ]
+}

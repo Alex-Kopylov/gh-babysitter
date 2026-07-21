@@ -69,7 +69,7 @@ index:       (repo, event) → {conn_id, ...}           # обратный ин�
 
 ## Стек
 
-- Сервис: Python, FastAPI, `sse-starlette` (стрим), `httpx` (проверка токенов у GitHub API), locust (нагрузочное тестирование). БД нет — реестр подписок в памяти ([модель данных](#модель-данных)).
+- Сервис: Python, FastAPI, `sse-starlette` (стрим), `httpx2` (проверка токенов у GitHub API), locust (нагрузочное тестирование). БД нет — реестр подписок в памяти ([модель данных](#модель-данных)).
 - CLI: Python, Typer; упаковка как gh-расширение — см. [cli](05-cli.md#дистрибуция).
 - Шаблон репозитория: `uvx copier copy gh:Alex-Kopylov/ai-ready-modern-python-template project-name`
 - LICENSE: TBD

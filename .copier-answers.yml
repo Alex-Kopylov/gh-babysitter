@@ -1,0 +1,17 @@
+# Changes here will be overwritten by Copier
+_commit: v1.0.0-55-g3f07b19
+_src_path: gh:Alex-Kopylov/ai-ready-modern-python-template
+author_name: Alex Kopylov
+coverage_fail_under: 80
+extra_linters:
+- jscpd
+- typos
+- markdownlint
+license: Skip
+main_branch_name: main
+parallel_testing: true
+project_description: 'Webhook gateway with fan-out for GitHub orgs: one org-level
+    webhook in, individual filtered SSE subscriptions out'
+project_name: gh_babysitter
+python_version: '3.14'
+use_github_actions: true

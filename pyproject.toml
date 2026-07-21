@@ -1,0 +1,61 @@
+[project]
+name = "gh_babysitter"
+version = "0.1.0"
+description = "Webhook gateway with fan-out for GitHub orgs: one org-level webhook in, individual filtered SSE subscriptions out"
+requires-python = ">=3.14"
+dependencies = [
+    "fastapi",
+    "httpx2",
+    "sse-starlette",
+    "typer>=0.27.0",
+    "uvicorn",
+]
+
+[project.scripts]
+gh-babysitter = "gh_babysitter.cli.main:main"
+
+[dependency-groups]
+dev = [
+  # Linting & formatting
+  "ruff",
+  "ty",
+  "flake8",
+  "flake8-pydantic",
+  "flake8-async",
+  "vulture",
+  "deptry>=0.25.1",
+  # Testing
+  "pytest",
+  "pytest-xdist",
+  "pytest-cov>=7.1.0",
+  # Git hooks
+  "prek",
+  # YAML linting
+  "yamllint",
+  # JSON schema validation
+  "check-jsonschema",
+  "pytest-asyncio",
+  "anyio",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.uv]
+python-preference = "only-managed"
+
+[tool.deptry]
+known_first_party = ["gh_babysitter"]
+
+[tool.ty.environment]
+python-version = "3.14"
+
+[tool.coverage.run]
+source = ["src"]
+branch = true
+
+[tool.coverage.report]
+show_missing = true
+skip_empty = true
+fail_under = 80
