@@ -46,6 +46,9 @@ build-backend = "hatchling.build"
 [tool.uv]
 python-preference = "only-managed"
 
+[tool.deptry]
+known_first_party = ["gh_babysitter"]
+
 [tool.ty.environment]
 python-version = "3.14"
 
