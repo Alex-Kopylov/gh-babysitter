@@ -3,6 +3,7 @@
 from importlib import import_module
 
 import pytest
+from pydantic import SecretStr
 
 
 @pytest.fixture(autouse=True)
@@ -27,13 +28,13 @@ def test_settings_prefer_gh_token(monkeypatch):
     monkeypatch.setenv("GH_TOKEN", "gh-token")
     monkeypatch.setenv("GITHUB_TOKEN", "github-token")
 
-    assert _config_module().Settings(_env_file=None).github_token == "gh-token"
+    assert _config_module().Settings(_env_file=None).github_token == SecretStr("gh-token")
 
 
 def test_settings_fall_back_to_github_token(monkeypatch):
     monkeypatch.setenv("GITHUB_TOKEN", "github-token")
 
-    assert _config_module().Settings(_env_file=None).github_token == "github-token"
+    assert _config_module().Settings(_env_file=None).github_token == SecretStr("github-token")
 
 
 def test_settings_read_shared_dotenv_file(monkeypatch, tmp_path):

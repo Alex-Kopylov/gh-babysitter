@@ -2,7 +2,7 @@
 
 from functools import cache
 
-from pydantic import AliasChoices, Field
+from pydantic import AliasChoices, Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 DEFAULT_SERVER = "http://localhost:8000"
@@ -23,7 +23,7 @@ class Settings(BaseSettings):
         default=DEFAULT_SERVER,
         validation_alias="GH_BABYSITTER_SERVER",
     )
-    github_token: str | None = Field(
+    github_token: SecretStr | None = Field(
         default=None,
         validation_alias=AliasChoices("GH_TOKEN", "GITHUB_TOKEN"),
     )

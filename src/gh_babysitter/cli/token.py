@@ -11,7 +11,7 @@ from gh_babysitter.cli.config import get_settings
 def resolve_token() -> str:
     """Resolve a GitHub token from standard environment variables or ``gh``."""
     if value := get_settings().github_token:
-        return value
+        return value.get_secret_value()
     try:
         result = subprocess.run(
             ["gh", "auth", "token"],  # ruff:ignore[start-process-with-partial-path]
