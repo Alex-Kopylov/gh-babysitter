@@ -1,8 +1,7 @@
 """Tests for terminal-state checks."""
 
-import httpx
+import httpx2
 import pytest
-import respx
 
 from gh_babysitter.cli.until import UNTIL_MATRIX, satisfied_by_event, satisfied_by_poll
 
@@ -53,7 +52,6 @@ def test_satisfied_by_event_rejects_non_terminal_event(until, event):
     assert not satisfied_by_event(until, event)
 
 
-@respx.mock
 @pytest.mark.parametrize(
     ("until", "path", "response", "expected"),
     [
@@ -72,9 +70,15 @@ def test_satisfied_by_event_rejects_non_terminal_event(until, event):
     ],
 )
 async def test_satisfied_by_poll_checks_github_state(until, path, response, expected):
-    respx.get(f"https://api.github.com{path}").mock(return_value=httpx.Response(200, json=response))
+    def handler(request):
+        assert request.method == "GET"
+        assert request.url.path == path
+        return httpx2.Response(200, json=response)
 
-    async with httpx.AsyncClient(base_url="https://api.github.com") as client:
+    async with httpx2.AsyncClient(
+        base_url="https://api.github.com",
+        transport=httpx2.MockTransport(handler),
+    ) as client:
         result = await satisfied_by_poll(until, client, "octo/repo", 42)
 
     assert result is expected

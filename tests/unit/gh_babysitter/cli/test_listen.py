@@ -5,7 +5,7 @@ from typing import cast
 from unittest.mock import AsyncMock
 
 import anyio.lowlevel
-import httpx
+import httpx2
 import pytest
 import typer
 
@@ -52,7 +52,7 @@ class _Client:
 
 class _FailingContext:
     async def __aenter__(self):
-        raise httpx.ConnectError("disconnected")
+        raise httpx2.ConnectError("disconnected")
 
     async def __aexit__(self, *args):
         return None  # noqa: ASYNC910 - Test double has no asynchronous cleanup.
@@ -76,7 +76,7 @@ class _ReadFailureLines:
         try:
             return next(self.lines)
         except StopIteration as error:
-            raise httpx.ReadError("disconnected") from error
+            raise httpx2.ReadError("disconnected") from error
 
 
 class _SequenceClient(_Client):
@@ -123,7 +123,7 @@ async def test_listen_prints_pretty_events_and_handles_ready(monkeypatch, capsys
 
     result = await listen.listen(
         listen.ListenOptions(repo="octo/repo", events="issues", count=1, format="pretty"),
-        lambda **kwargs: cast("httpx.AsyncClient", client),
+        lambda **kwargs: cast("httpx2.AsyncClient", client),
     )
 
     output = capsys.readouterr()
@@ -138,7 +138,7 @@ async def test_listen_treats_server_auth_rejection_as_fatal(monkeypatch, capsys)
 
     result = await listen.listen(
         listen.ListenOptions(repo="octo/repo", events="issues"),
-        lambda **kwargs: cast("httpx.AsyncClient", _Client(_Response(status_code=403))),
+        lambda **kwargs: cast("httpx2.AsyncClient", _Client(_Response(status_code=403))),
     )
 
     assert result == 1
@@ -160,7 +160,7 @@ async def test_listen_stream_client_disables_read_timeout(monkeypatch):
     result = await listen.listen(
         listen.ListenOptions(repo="octo/repo", events="issues", count=1),
         lambda **kwargs: (
-            calls.append(kwargs) or cast("httpx.AsyncClient", _Client(_Response(f"data: {json.dumps(envelope)}", "")))
+            calls.append(kwargs) or cast("httpx2.AsyncClient", _Client(_Response(f"data: {json.dumps(envelope)}", "")))
         ),
     )
 
@@ -177,7 +177,7 @@ async def test_listen_github_client_keeps_finite_timeout(monkeypatch):
 
     result = await listen.listen(
         listen.ListenOptions(repo="octo/repo", number=42, until="closed"),
-        lambda **kwargs: calls.append(kwargs) or cast("httpx.AsyncClient", _Client(_Response())),
+        lambda **kwargs: calls.append(kwargs) or cast("httpx2.AsyncClient", _Client(_Response())),
     )
 
     timeout = calls[1]["timeout"]
@@ -211,7 +211,7 @@ async def test_listen_resets_backoff_after_a_successful_connection(monkeypatch):
 
     result = await listen.listen(
         listen.ListenOptions(repo="octo/repo", events="issues", count=1),
-        lambda **kwargs: cast("httpx.AsyncClient", client),
+        lambda **kwargs: cast("httpx2.AsyncClient", client),
     )
 
     assert result == 0

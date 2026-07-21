@@ -3,7 +3,7 @@
 import secrets
 from typing import Any
 
-import httpx
+import httpx2
 import typer
 
 from gh_babysitter.cli.token import resolve_token
@@ -37,7 +37,7 @@ async def setup_webhook(
     hook_id = None
     next_url: str | None = f"/orgs/{org}/hooks"
     params: dict[str, int] | None = {"per_page": 100}
-    async with httpx.AsyncClient(base_url=_GITHUB_API_URL, headers=headers) as client:
+    async with httpx2.AsyncClient(base_url=_GITHUB_API_URL, headers=headers) as client:
         while next_url:
             response = await client.get(next_url, params=params)
             response.raise_for_status()

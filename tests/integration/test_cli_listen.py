@@ -6,9 +6,8 @@ import hmac
 import json
 
 import anyio.lowlevel
-import httpx
+import httpx2
 import pytest
-import respx
 
 from gh_babysitter.cli import listen
 from gh_babysitter.server.app import create_app
@@ -36,10 +35,13 @@ def make_app(registry: Registry, authenticator: Authenticator):
     )
 
 
-def client_factory(app):
+def client_factory(app, github_handler=None):
     def make(*, base_url, headers, **kwargs):
-        transport = httpx.ASGITransport(app=app) if base_url == "http://server" else None
-        return httpx.AsyncClient(transport=transport, base_url=base_url, headers=headers, **kwargs)
+        if base_url == "http://server":
+            transport = httpx2.ASGITransport(app=app)
+        else:
+            transport = httpx2.MockTransport(github_handler) if github_handler else None
+        return httpx2.AsyncClient(transport=transport, base_url=base_url, headers=headers, **kwargs)
 
     return make
 
@@ -55,7 +57,7 @@ async def deliver(app, event, payload):
     body = json.dumps(payload).encode()
     digest = hmac.new(b"secret", body, hashlib.sha256).hexdigest()
     headers = {"X-GitHub-Event": event, "X-Hub-Signature-256": f"sha256={digest}"}
-    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://server") as client:
+    async with httpx2.AsyncClient(transport=httpx2.ASGITransport(app=app), base_url="http://server") as client:
         response = await client.post("/webhook", content=body, headers=headers)
     assert response.status_code == 202
 
@@ -96,15 +98,18 @@ async def test_listen_exits_after_requested_event_count(monkeypatch, capsys, exi
     assert json.loads(capsys.readouterr().out)["number"] == 42
 
 
-@respx.mock
 async def test_listen_until_exits_on_terminal_stream_event(monkeypatch, capsys):
     registry = Registry()
     authenticator = _FakeAuthenticator()
     app = make_app(registry, authenticator)
     monkeypatch.setattr(listen, "resolve_token", lambda: "token")
-    respx.get("https://api.github.com/repos/octo/repo/pulls/42").mock(
-        return_value=httpx.Response(200, json={"merged": False}),
-    )
+    github_requests = []
+
+    def github_handler(request):
+        assert request.method == "GET"
+        github_requests.append(request)
+        return httpx2.Response(200, json={"merged": False})
+
     task = asyncio.create_task(
         listen.listen(
             listen.ListenOptions(
@@ -114,7 +119,7 @@ async def test_listen_until_exits_on_terminal_stream_event(monkeypatch, capsys):
                 timeout=1,
                 server="http://server",
             ),
-            client_factory(app),
+            client_factory(app, github_handler),
         )
     )
     await wait_until_registered(registry)
@@ -130,18 +135,21 @@ async def test_listen_until_exits_on_terminal_stream_event(monkeypatch, capsys):
     authenticator.revoked = True
 
     assert await task == 0
+    assert [request.url.path for request in github_requests] == ["/repos/octo/repo/pulls/42"]
     assert json.loads(capsys.readouterr().out)["event"] == "pull_request"
 
 
-@respx.mock
 async def test_listen_until_polls_before_connecting(monkeypatch, capsys):
     registry = Registry()
     authenticator = _FakeAuthenticator()
     app = make_app(registry, authenticator)
     monkeypatch.setattr(listen, "resolve_token", lambda: "token")
-    poll = respx.get("https://api.github.com/repos/octo/repo/issues/42").mock(
-        return_value=httpx.Response(200, json={"state": "closed"}),
-    )
+    github_requests = []
+
+    def github_handler(request):
+        assert request.method == "GET"
+        github_requests.append(request)
+        return httpx2.Response(200, json={"state": "closed"})
 
     result = await listen.listen(
         listen.ListenOptions(
@@ -151,11 +159,11 @@ async def test_listen_until_polls_before_connecting(monkeypatch, capsys):
             timeout=1,
             server="http://server",
         ),
-        client_factory(app),
+        client_factory(app, github_handler),
     )
 
     assert result == 0
-    assert poll.called
+    assert [request.url.path for request in github_requests] == ["/repos/octo/repo/issues/42"]
     assert registry.connections == {}
     assert capsys.readouterr().out == ""
 

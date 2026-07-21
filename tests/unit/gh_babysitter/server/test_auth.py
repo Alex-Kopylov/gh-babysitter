@@ -1,83 +1,86 @@
 """Tests for GitHub authentication and caching."""
 
-import httpx
-import pytest
-import respx
+import httpx2
 
 from gh_babysitter.server import auth as auth_module
 from gh_babysitter.server.auth import GitHubAuthenticator
 
 
-@pytest.fixture
-async def client():
-    async with httpx.AsyncClient() as value:
-        yield value
+def make_client(*, user_status=200, repo_status=200):
+    requests = []
+
+    def handler(request):
+        assert request.method == "GET"
+        requests.append(request)
+        if request.url.path == "/user":
+            return httpx2.Response(user_status, json={"login": "octocat"})
+        assert request.url.path == "/repos/octo/repo"
+        return httpx2.Response(repo_status)
+
+    return httpx2.AsyncClient(transport=httpx2.MockTransport(handler)), requests
 
 
-@respx.mock
-async def test_verify_returns_login_for_visible_repository(client):
-    user = respx.get("https://api.example/user").mock(return_value=httpx.Response(200, json={"login": "octocat"}))
-    repo = respx.get("https://api.example/repos/octo/repo").mock(return_value=httpx.Response(200, json={}))
-    authenticator = GitHubAuthenticator("https://api.example", 300, client)
+async def test_verify_returns_login_for_visible_repository():
+    client, requests = make_client()
+    async with client:
+        authenticator = GitHubAuthenticator("https://api.example", 300, client)
 
-    assert await authenticator.verify("token", "octo/repo") == "octocat"
-    assert user.calls.last.request.headers["accept"] == "application/vnd.github+json"
-    assert repo.calls.last.request.headers["authorization"] == "Bearer token"
+        assert await authenticator.verify("token", "octo/repo") == "octocat"
 
-
-@respx.mock
-async def test_verify_returns_none_for_invalid_token(client):
-    respx.get("https://api.example/user").mock(return_value=httpx.Response(401))
-    repo = respx.get("https://api.example/repos/octo/repo")
-    authenticator = GitHubAuthenticator("https://api.example", 300, client)
-
-    assert await authenticator.verify("bad", "octo/repo") is None
-    assert not repo.called
+    assert requests[0].headers["accept"] == "application/vnd.github+json"
+    assert requests[1].headers["authorization"] == "Bearer token"
 
 
-@respx.mock
-async def test_verify_returns_none_for_hidden_repository(client):
-    respx.get("https://api.example/user").mock(return_value=httpx.Response(200, json={"login": "octocat"}))
-    respx.get("https://api.example/repos/octo/repo").mock(return_value=httpx.Response(404))
-    authenticator = GitHubAuthenticator("https://api.example", 300, client)
+async def test_verify_returns_none_for_invalid_token():
+    client, requests = make_client(user_status=401)
+    async with client:
+        authenticator = GitHubAuthenticator("https://api.example", 300, client)
 
-    assert await authenticator.verify("token", "octo/repo") is None
+        assert await authenticator.verify("bad", "octo/repo") is None
 
-
-@respx.mock
-async def test_cache_hit_avoids_second_github_call(client):
-    user = respx.get("https://api.example/user").mock(return_value=httpx.Response(200, json={"login": "octocat"}))
-    repo = respx.get("https://api.example/repos/octo/repo").mock(return_value=httpx.Response(200))
-    authenticator = GitHubAuthenticator("https://api.example", 300, client)
-
-    assert await authenticator.verify("token", "octo/repo") == "octocat"
-    assert await authenticator.verify("token", "octo/repo") == "octocat"
-    assert user.call_count == repo.call_count == 1
+    assert [request.url.path for request in requests] == ["/user"]
 
 
-@respx.mock
-async def test_expired_cache_calls_github_again(client, monkeypatch):
+async def test_verify_returns_none_for_hidden_repository():
+    client, _ = make_client(repo_status=404)
+    async with client:
+        authenticator = GitHubAuthenticator("https://api.example", 300, client)
+
+        assert await authenticator.verify("token", "octo/repo") is None
+
+
+async def test_cache_hit_avoids_second_github_call():
+    client, requests = make_client()
+    async with client:
+        authenticator = GitHubAuthenticator("https://api.example", 300, client)
+
+        assert await authenticator.verify("token", "octo/repo") == "octocat"
+        assert await authenticator.verify("token", "octo/repo") == "octocat"
+
+    assert [request.url.path for request in requests] == ["/user", "/repos/octo/repo"]
+
+
+async def test_expired_cache_calls_github_again(monkeypatch):
     now = [0.0]
     monkeypatch.setattr(auth_module, "monotonic", lambda: now[0])
-    user = respx.get("https://api.example/user").mock(return_value=httpx.Response(200, json={"login": "octocat"}))
-    repo = respx.get("https://api.example/repos/octo/repo").mock(return_value=httpx.Response(200))
-    authenticator = GitHubAuthenticator("https://api.example", 5, client)
+    client, requests = make_client()
+    async with client:
+        authenticator = GitHubAuthenticator("https://api.example", 5, client)
 
-    await authenticator.verify("token", "octo/repo")
-    now[0] = 6
-    await authenticator.verify("token", "octo/repo")
+        await authenticator.verify("token", "octo/repo")
+        now[0] = 6
+        await authenticator.verify("token", "octo/repo")
 
-    assert user.call_count == repo.call_count == 2
+    assert len(requests) == 4
 
 
-@respx.mock
-async def test_fresh_bypasses_and_refreshes_cache(client):
-    user = respx.get("https://api.example/user").mock(return_value=httpx.Response(200, json={"login": "octocat"}))
-    repo = respx.get("https://api.example/repos/octo/repo").mock(return_value=httpx.Response(200))
-    authenticator = GitHubAuthenticator("https://api.example", 300, client)
+async def test_fresh_bypasses_and_refreshes_cache():
+    client, requests = make_client()
+    async with client:
+        authenticator = GitHubAuthenticator("https://api.example", 300, client)
 
-    await authenticator.verify("token", "octo/repo")
-    await authenticator.verify("token", "octo/repo", fresh=True)
-    await authenticator.verify("token", "octo/repo")
+        await authenticator.verify("token", "octo/repo")
+        await authenticator.verify("token", "octo/repo", fresh=True)
+        await authenticator.verify("token", "octo/repo")
 
-    assert user.call_count == repo.call_count == 2
+    assert len(requests) == 4

@@ -17,8 +17,8 @@ except where a draft is explicitly promoted to a decision here.
 
 ## Dependencies
 
-Runtime: `fastapi`, `sse-starlette`, `uvicorn`, `httpx`, `typer`.
-Dev (add to `dev` group): `pytest-asyncio`, `respx`, `anyio`.
+Runtime: `fastapi`, `sse-starlette`, `uvicorn`, `httpx2`, `typer`.
+Dev (add to `dev` group): `pytest-asyncio`, `anyio`.
 
 ## Server — `src/gh_babysitter/server/`
 
@@ -42,13 +42,13 @@ Dev (add to `dev` group): `pytest-asyncio`, `respx`, `anyio`.
   (idempotent), `match(norm) -> list[asyncio.Queue]` — deduped per connection: a
   filter matches when repo and event equal and each of action/number is `None`
   in the filter or equal.
-- `auth.py` — `GitHubAuthenticator(api_url, cache_ttl, client: httpx.AsyncClient)`:
+- `auth.py` — `GitHubAuthenticator(api_url, cache_ttl, client: httpx2.AsyncClient)`:
   `verify(token, repo) -> str | None` (login on success). `GET /user` for
   identity, `GET /repos/{repo}` for visibility; any non-200 → None. TTL cache
   keyed `(sha256(token), repo)`; `verify(..., fresh=True)` bypasses and refreshes
   it (used by the recheck loop). Send `Accept: application/vnd.github+json`.
 - `app.py` — `create_app(settings, registry=None, authenticator=None) -> FastAPI`
-  (injectable for tests; authenticator's httpx client managed via lifespan).
+  (injectable for tests; authenticator's httpx2 client managed via lifespan).
   - `POST /webhook`: raw body → HMAC check (secret unset ⇒ always 401) else 401
     without parsing. `X-GitHub-Event: ping` → 200 `{"ok": true}`. Normalize;
     no repo → 204. Match → `queue.put_nowait` each, `QueueFull` ⇒ drop that
@@ -88,7 +88,7 @@ Dev (add to `dev` group): `pytest-asyncio`, `respx`, `anyio`.
     contains a review with state `APPROVED`/`CHANGES_REQUESTED`.
 - `listen.py` — core logic `async listen(opts, client_factory) -> int` returning
   the exit code; the Typer command wraps it in `asyncio.run`. `client_factory`
-  is injectable (tests pass `httpx.ASGITransport`-backed clients).
+  is injectable (tests pass `httpx2.ASGITransport`-backed clients).
   - Validation: `--until` requires `-n`; `--until` auto-adds its required events
     to `-E`; without `--until`, `-E` is required; `--first-event` = `--count 1`
     (error if both). `--action`, `--number` optional pass-through.
@@ -122,17 +122,17 @@ Add `asyncio_mode = auto` for pytest-asyncio. Unit: signature (good/bad/missing/
 malformed header), normalize (all 5 menu events incl. issue_comment on a PR,
 release without number, missing action, missing repository), registry (match by
 repo/event/action/number, dedupe across overlapping filters, unregister,
-QueueFull dropping), auth (respx: 200/401/404 paths, cache hit avoids second
+QueueFull dropping), auth (`httpx2.MockTransport`: 200/401/404 paths, cache hit avoids second
 call, TTL expiry, `fresh=True` bypass), durations, until (event matrix + poll
-paths via respx), SSE parser (multi-line data, comments, event types).
-Integration (`tests/integration/`, httpx `ASGITransport` + anyio task groups, fake
+paths via `httpx2.MockTransport`), SSE parser (multi-line data, comments, event types).
+Integration (`tests/integration/`, `httpx2.ASGITransport` + anyio task groups, fake
 authenticator injected): webhook HMAC 401 / ping 200 / 202 matched; stream 401
 without token, 403 unknown repo, 422 bad events; end-to-end webhook→SSE delivery
 with action/number filtering; one delivery for overlapping filters; recheck
 closing the stream after access revocation (short intervals via settings).
 CLI: validation rules, `listen` core against the real app via ASGITransport
 (count/first-event/until/timeout-124 paths), pretty format, setup create+update
-paths via respx.
+paths via `httpx2.MockTransport`.
 
 ## E2E (live, not in CI) — `scripts/e2e.sh`
 

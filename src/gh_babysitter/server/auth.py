@@ -5,7 +5,7 @@ import hashlib
 from time import monotonic
 from typing import Protocol
 
-import httpx
+import httpx2
 
 
 class Authenticator(Protocol):
@@ -19,7 +19,7 @@ class Authenticator(Protocol):
 class GitHubAuthenticator:
     """Verify GitHub tokens and cache repository visibility checks."""
 
-    def __init__(self, api_url: str, cache_ttl: int, client: httpx.AsyncClient) -> None:
+    def __init__(self, api_url: str, cache_ttl: int, client: httpx2.AsyncClient) -> None:
         """Configure GitHub API access and the verification cache."""
         self.api_url = api_url.rstrip("/")
         self.cache_ttl = cache_ttl
@@ -41,11 +41,11 @@ class GitHubAuthenticator:
         }
         user_response = await self.client.get(f"{self.api_url}/user", headers=headers)
         login = None
-        if user_response.status_code == httpx.codes.OK:
+        if user_response.status_code == httpx2.codes.OK:
             candidate = user_response.json().get("login")
             if isinstance(candidate, str):
                 repo_response = await self.client.get(f"{self.api_url}/repos/{repo}", headers=headers)
-                if repo_response.status_code == httpx.codes.OK:
+                if repo_response.status_code == httpx2.codes.OK:
                     login = candidate
 
         self._cache[key] = (monotonic() + self.cache_ttl, login)

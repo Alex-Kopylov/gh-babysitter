@@ -7,7 +7,7 @@ import json
 
 import anyio
 import anyio.lowlevel
-import httpx
+import httpx2
 
 from gh_babysitter.server.app import create_app
 from gh_babysitter.server.auth import Authenticator
@@ -33,7 +33,7 @@ def make_client(
     registry: Registry | None = None,
     authenticator: Authenticator | None = None,
     recheck_interval: float = 0.02,
-) -> httpx.AsyncClient:
+) -> httpx2.AsyncClient:
     settings = Settings(
         webhook_secret="secret",
         recheck_interval=recheck_interval,
@@ -41,7 +41,7 @@ def make_client(
         queue_maxsize=1,
     )
     app = create_app(settings, registry=registry, authenticator=authenticator)
-    return httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test")
+    return httpx2.AsyncClient(transport=httpx2.ASGITransport(app=app), base_url="http://test")
 
 
 def webhook_headers(body, event="issues", *, valid=True):
@@ -60,7 +60,7 @@ async def wait_until_registered(registry: Registry) -> None:
             await anyio.lowlevel.checkpoint()
 
 
-def sse_data(response: httpx.Response):
+def sse_data(response: httpx2.Response):
     return [json.loads(line.removeprefix("data: ")) for line in response.text.splitlines() if line.startswith("data: ")]
 
 
@@ -73,7 +73,7 @@ async def test_webhook_rejects_bad_hmac_before_parsing_json():
 
 async def test_webhook_rejects_requests_when_secret_is_unset():
     app = create_app(Settings(webhook_secret=None), authenticator=_FakeAuthenticator())
-    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+    async with httpx2.AsyncClient(transport=httpx2.ASGITransport(app=app), base_url="http://test") as client:
         response = await client.post("/webhook", content=b"{}")
 
     assert response.status_code == 401
@@ -178,7 +178,7 @@ async def test_stream_rejects_bad_events_and_repository_names():
 async def test_webhook_to_sse_respects_action_and_number_filters():
     registry = Registry()
     authenticator = _FakeAuthenticator()
-    response: httpx.Response | None = None
+    response: httpx2.Response | None = None
 
     async def consume(client):
         nonlocal response
@@ -231,7 +231,7 @@ async def test_webhook_to_sse_respects_action_and_number_filters():
 async def test_overlapping_stream_filters_receive_one_delivery():
     registry = Registry()
     authenticator = _FakeAuthenticator()
-    response: httpx.Response | None = None
+    response: httpx2.Response | None = None
 
     async def consume(client):
         nonlocal response
@@ -263,7 +263,7 @@ async def test_overlapping_stream_filters_receive_one_delivery():
 async def test_recheck_closes_stream_after_access_revocation():
     registry = Registry()
     authenticator = _FakeAuthenticator()
-    response: httpx.Response | None = None
+    response: httpx2.Response | None = None
 
     async def consume(client):
         nonlocal response
