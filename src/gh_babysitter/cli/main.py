@@ -5,6 +5,7 @@ from typing import Annotated
 
 import typer
 
+from gh_babysitter.cli.config import get_settings
 from gh_babysitter.cli.durations import parse_duration
 from gh_babysitter.cli.listen import ListenOptions, listen
 from gh_babysitter.cli.setup import setup_webhook
@@ -16,6 +17,10 @@ app = typer.Typer(no_args_is_help=True)
 @app.command("listen")
 def listen_command(  # ruff:ignore[too-many-arguments, too-many-positional-arguments]
     repo: Annotated[str, typer.Option("-R", "--repo")],
+    server: Annotated[
+        str,
+        typer.Option("--server", default_factory=lambda: get_settings().server),
+    ],
     events: Annotated[str | None, typer.Option("-E", "--events")] = None,
     number: Annotated[int | None, typer.Option("-n", "--number")] = None,
     action: Annotated[str | None, typer.Option("--action")] = None,
@@ -23,10 +28,6 @@ def listen_command(  # ruff:ignore[too-many-arguments, too-many-positional-argum
     timeout: Annotated[str | None, typer.Option("--timeout")] = None,
     count: Annotated[int | None, typer.Option("--count")] = None,
     first_event: Annotated[bool, typer.Option("--first-event")] = False,
-    server: Annotated[
-        str,
-        typer.Option("--server", envvar="GH_BABYSITTER_SERVER"),
-    ] = "http://localhost:8000",
     output_format: Annotated[str, typer.Option("--format")] = "json",
 ) -> None:
     """Stream matching GitHub events."""

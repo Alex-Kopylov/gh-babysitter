@@ -1,6 +1,16 @@
 """Tests for the server process entry point."""
 
+import pytest
+
 from gh_babysitter.server import main as server_main
+
+
+@pytest.fixture(autouse=True)
+def _clear_settings_cache(monkeypatch, tmp_path):
+    monkeypatch.chdir(tmp_path)
+    server_main.get_settings.cache_clear()
+    yield
+    server_main.get_settings.cache_clear()
 
 
 def test_run_warns_when_webhook_secret_is_unset(monkeypatch, capsys):
