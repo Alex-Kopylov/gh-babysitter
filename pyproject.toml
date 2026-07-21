@@ -5,7 +5,7 @@ description = "Webhook gateway with fan-out for GitHub orgs: one org-level webho
 requires-python = ">=3.14"
 dependencies = [
     "fastapi",
-    "httpx",
+    "httpx2",
     "sse-starlette",
     "typer>=0.27.0",
     "uvicorn",
@@ -35,7 +35,6 @@ dev = [
   # JSON schema validation
   "check-jsonschema",
   "pytest-asyncio",
-  "respx",
   "anyio",
 ]
 

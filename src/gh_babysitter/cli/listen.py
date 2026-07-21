@@ -9,7 +9,7 @@ import sys
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
-import httpx
+import httpx2
 import typer
 
 from gh_babysitter.cli.sse import parse_sse
@@ -21,8 +21,8 @@ if TYPE_CHECKING:
     from collections.abc import Callable
 
 _GITHUB_API_URL = "https://api.github.com"
-_SERVER_TIMEOUT = httpx.Timeout(connect=10, read=None, write=10, pool=10)
-_GITHUB_TIMEOUT = httpx.Timeout(10)
+_SERVER_TIMEOUT = httpx2.Timeout(connect=10, read=None, write=10, pool=10)
+_GITHUB_TIMEOUT = httpx2.Timeout(10)
 
 
 @dataclass(frozen=True)
@@ -82,7 +82,7 @@ def _print_event(envelope: dict[str, Any], output_format: str) -> None:
 
 
 async def _consume_stream(
-    response: httpx.Response,
+    response: httpx2.Response,
     options: ListenOptions,
     remaining: int | None,
 ) -> tuple[int | None, int | None]:
@@ -101,7 +101,7 @@ async def _consume_stream(
     return None, remaining
 
 
-def _response_exit_code(response: httpx.Response) -> int | None:
+def _response_exit_code(response: httpx2.Response) -> int | None:
     if response.status_code in {401, 403}:
         print(f"server rejected the GitHub token ({response.status_code})", file=sys.stderr)
         return 1
@@ -113,8 +113,8 @@ async def _listen(
     options: ListenOptions,
     events: list[str],
     count: int | None,
-    server_client: httpx.AsyncClient,
-    github_client: httpx.AsyncClient | None,
+    server_client: httpx2.AsyncClient,
+    github_client: httpx2.AsyncClient | None,
 ) -> int:
     await asyncio.sleep(0)
     if (
@@ -142,7 +142,7 @@ async def _listen(
                 result, remaining = await _consume_stream(response, options, remaining)
                 if result is not None:
                     return result
-        except httpx.HTTPError:
+        except httpx2.HTTPError:
             pass
 
         if (
@@ -158,7 +158,7 @@ async def _listen(
 
 async def listen(
     options: ListenOptions,
-    client_factory: Callable[..., httpx.AsyncClient] = httpx.AsyncClient,
+    client_factory: Callable[..., httpx2.AsyncClient] = httpx2.AsyncClient,
 ) -> int:
     """Listen for matching server events until an exit condition is met."""
     await asyncio.sleep(0)
@@ -186,6 +186,6 @@ async def listen(
                 return await _listen(options, events, count, server_client, None)
     except TimeoutError:
         return 124
-    except (httpx.HTTPError, json.JSONDecodeError) as error:
+    except (httpx2.HTTPError, json.JSONDecodeError) as error:
         print(f"error: {error}", file=sys.stderr)
         return 1

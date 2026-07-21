@@ -9,7 +9,7 @@ from dataclasses import asdict
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Annotated, Any
 
-import httpx
+import httpx2
 from fastapi import FastAPI, HTTPException, Query, Request, Response
 from fastapi.responses import JSONResponse
 from sse_starlette.sse import EventSourceResponse
@@ -54,7 +54,7 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
         yield
         return
     settings: Settings = app.state.settings
-    async with httpx.AsyncClient() as client:
+    async with httpx2.AsyncClient() as client:
         app.state.authenticator = GitHubAuthenticator(settings.github_api_url, settings.auth_cache_ttl, client)
         yield
 

@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
-    import httpx
+    import httpx2
 
 UNTIL_MATRIX: dict[str, frozenset[str]] = {
     "merged": frozenset({"pull_request"}),
@@ -28,7 +28,7 @@ def satisfied_by_event(until: str, envelope: dict[str, Any]) -> bool:
     return event == "pull_request_review" and action == "submitted" and payload.get("review", {}).get("state") == state
 
 
-async def satisfied_by_poll(until: str, client: httpx.AsyncClient, repo: str, number: int) -> bool:
+async def satisfied_by_poll(until: str, client: httpx2.AsyncClient, repo: str, number: int) -> bool:
     """Poll GitHub for whether an object already reached a terminal state."""
     if until == "merged":
         response = await client.get(f"/repos/{repo}/pulls/{number}")
