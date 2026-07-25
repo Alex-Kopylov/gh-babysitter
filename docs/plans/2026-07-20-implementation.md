@@ -17,13 +17,14 @@ except where a draft is explicitly promoted to a decision here.
 
 ## Dependencies
 
-Runtime: `fastapi`, `sse-starlette`, `uvicorn`, `httpx2`, `typer`.
+Runtime: `fastapi`, `sse-starlette`, `uvicorn`, `httpx2`, `typer`, `pydantic`,
+`pydantic-settings`.
 Dev (add to `dev` group): `pytest-asyncio`, `anyio`.
 
 ## Server — `src/gh_babysitter/server/`
 
-- `config.py` — frozen `Settings` dataclass + `Settings.from_env()`. Env vars
-  (prefix `GH_BABYSITTER_`): `WEBHOOK_SECRET` (no default), `GITHUB_API_URL`
+- `config.py` — frozen Pydantic `BaseSettings` + cached `get_settings()`. Reads
+  `.env` and env vars (prefix `GH_BABYSITTER_`): `WEBHOOK_SECRET` (no default), `GITHUB_API_URL`
   (`https://api.github.com`), `AUTH_CACHE_TTL` (300), `RECHECK_INTERVAL` (300),
   `PING_INTERVAL` (30), `QUEUE_MAXSIZE` (256).
 - `events.py` — `EVENT_MENU: frozenset[str]` (menu above) and number extraction
@@ -65,12 +66,14 @@ Dev (add to `dev` group): `pytest-asyncio`, `anyio`.
   - Recheck: generator loop `asyncio.wait_for(queue.get(), timeout=<time to next
     recheck>)`; on timeout when recheck due → `verify(token, repo, fresh=True)`;
     None ⇒ close stream. Unregister in `finally`.
-- `main.py` (replace template stub) — `run(host, port)`: build settings from env,
+- `main.py` (replace template stub) — `run(host, port)`: load cached settings,
   warn to stderr when `WEBHOOK_SECRET` unset, `uvicorn.run`.
 
 ## CLI — `src/gh_babysitter/cli/`
 
-- `token.py` — `resolve_token()`: `GH_TOKEN` → `GITHUB_TOKEN` → `gh auth token`
+- `config.py` — frozen Pydantic `BaseSettings` + cached `get_settings()` for
+  `GH_BABYSITTER_SERVER` and `GH_TOKEN` → `GITHUB_TOKEN` precedence.
+- `token.py` — `resolve_token()`: cached `GH_TOKEN` → `GITHUB_TOKEN` → `gh auth token`
   (subprocess). None ⇒ typer.Exit(1) with a hint to run `gh auth login`.
 - `durations.py` — `parse_duration("12h" | "90m" | "45s" | "1h30m" | "300") -> float`
   seconds; bare number = seconds; invalid ⇒ usage error.

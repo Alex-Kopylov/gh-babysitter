@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING, Any
 import httpx2
 import typer
 
+from gh_babysitter.cli.config import DEFAULT_SERVER
 from gh_babysitter.cli.sse import parse_sse
 from gh_babysitter.cli.token import resolve_token
 from gh_babysitter.cli.until import UNTIL_MATRIX, satisfied_by_event, satisfied_by_poll
@@ -37,7 +38,7 @@ class ListenOptions:
     timeout: float | None = None
     count: int | None = None
     first_event: bool = False
-    server: str = "http://localhost:8000"
+    server: str = DEFAULT_SERVER
     format: str = "json"
 
 

@@ -8,6 +8,14 @@ import typer
 from gh_babysitter.cli import token
 
 
+@pytest.fixture(autouse=True)
+def _clear_settings_cache(monkeypatch, tmp_path):
+    monkeypatch.chdir(tmp_path)
+    token.get_settings.cache_clear()
+    yield
+    token.get_settings.cache_clear()
+
+
 def test_resolve_token_prefers_gh_token(monkeypatch):
     monkeypatch.setenv("GH_TOKEN", "gh-token")
     monkeypatch.setenv("GITHUB_TOKEN", "github-token")

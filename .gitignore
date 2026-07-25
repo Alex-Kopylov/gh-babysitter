@@ -15,3 +15,4 @@ reports/
 .coverage
 coverage.xml
 htmlcov/
+.env

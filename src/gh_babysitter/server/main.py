@@ -5,12 +5,12 @@ import sys
 import uvicorn
 
 from gh_babysitter.server.app import create_app
-from gh_babysitter.server.config import Settings
+from gh_babysitter.server.config import get_settings
 
 
 def run(host: str, port: int) -> None:
     """Run the gh-babysitter server."""
-    settings = Settings.from_env()
+    settings = get_settings()
     if not settings.webhook_secret:
         print(
             "warning: GH_BABYSITTER_WEBHOOK_SECRET is unset; webhooks will be rejected",

@@ -4,12 +4,21 @@ import tomllib
 from pathlib import Path
 from unittest.mock import AsyncMock
 
+import pytest
 from typer.testing import CliRunner
 
 from gh_babysitter.cli import main
 
 runner = CliRunner()
 ROOT = Path(__file__).parents[4]
+
+
+@pytest.fixture(autouse=True)
+def _clear_settings_cache(monkeypatch, tmp_path):
+    monkeypatch.chdir(tmp_path)
+    main.get_settings.cache_clear()
+    yield
+    main.get_settings.cache_clear()
 
 
 def test_app_exposes_all_commands():
