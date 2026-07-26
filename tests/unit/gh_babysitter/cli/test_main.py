@@ -52,6 +52,8 @@ def test_listen_command_maps_flags_and_returns_core_exit_code(monkeypatch):
             "2",
             "--server",
             "http://server",
+            "--api-url",
+            "https://github.acme.com/api/v3",
             "--format",
             "pretty",
         ],
@@ -68,6 +70,7 @@ def test_listen_command_maps_flags_and_returns_core_exit_code(monkeypatch):
             timeout=5_400,
             count=2,
             server="http://server",
+            api_url="https://github.acme.com/api/v3",
             format="pretty",
         )
     ]
@@ -86,6 +89,22 @@ def test_listen_command_reads_server_from_environment(monkeypatch):
     assert result.exit_code == 0
     assert captured[0].server == "https://babysitter.example"
     assert captured[0].first_event is True
+
+
+def test_listen_command_reads_api_url_from_environment(monkeypatch):
+    captured = []
+    monkeypatch.setattr(main, "listen", AsyncMock(side_effect=lambda options: captured.append(options) or 0))
+
+    result = runner.invoke(
+        main.app,
+        ["listen", "-R", "octo/repo", "-E", "issues"],
+        env={
+            "GH_BABYSITTER_GITHUB_API_URL": "https://github.acme.com/api/v3",
+        },
+    )
+
+    assert result.exit_code == 0
+    assert captured[0].api_url == "https://github.acme.com/api/v3"
 
 
 def test_listen_command_reports_invalid_duration_as_usage_error():
@@ -116,6 +135,8 @@ def test_setup_and_serve_commands_delegate(monkeypatch):
             "issues,release",
             "--secret",
             "secret",
+            "--api-url",
+            "https://github.acme.com/api/v3",
         ],
     )
     serve_result = runner.invoke(main.app, ["serve", "--host", "0.0.0.0", "--port", "9000"])
@@ -127,6 +148,7 @@ def test_setup_and_serve_commands_delegate(monkeypatch):
             "url": "https://hooks.example/webhook",
             "events": "issues,release",
             "secret": "secret",
+            "api_url": "https://github.acme.com/api/v3",
         }
     ]
     assert serve_result.exit_code == 0
