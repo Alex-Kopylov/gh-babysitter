@@ -9,7 +9,14 @@ from pydantic import SecretStr
 @pytest.fixture(autouse=True)
 def _clear_settings_environment(monkeypatch, tmp_path):
     monkeypatch.chdir(tmp_path)
-    for name in ("GH_BABYSITTER_SERVER", "GH_TOKEN", "GITHUB_TOKEN"):
+    for name in (
+        "GH_BABYSITTER_GITHUB_API_URL",
+        "GH_BABYSITTER_SERVER",
+        "GITHUB_API_URL",
+        "GITHUB_TOKEN",
+        "GH_HOST",
+        "GH_TOKEN",
+    ):
         monkeypatch.delenv(name, raising=False)
 
 
@@ -20,8 +27,78 @@ def _config_module():
 def test_settings_use_defaults():
     settings = _config_module().Settings(_env_file=None)
 
+    assert settings.api_url == "https://api.github.com"
     assert settings.server == "http://localhost:8000"
     assert settings.github_token is None
+
+
+def test_settings_use_gh_babysitter_github_api_url(monkeypatch):
+    monkeypatch.setenv(
+        "GH_BABYSITTER_GITHUB_API_URL",
+        "https://github.acme.com/api/v3",
+    )
+
+    assert _config_module().Settings(_env_file=None).api_url == "https://github.acme.com/api/v3"
+
+
+def test_settings_use_github_api_url(monkeypatch):
+    monkeypatch.setenv("GITHUB_API_URL", "https://github.acme.com/api/v3")
+
+    assert _config_module().Settings(_env_file=None).api_url == "https://github.acme.com/api/v3"
+
+
+def test_settings_prefer_gh_babysitter_github_api_url(monkeypatch):
+    monkeypatch.setenv(
+        "GH_BABYSITTER_GITHUB_API_URL",
+        "https://primary.example/api/v3",
+    )
+    monkeypatch.setenv("GITHUB_API_URL", "https://fallback.example/api/v3")
+
+    assert _config_module().Settings(_env_file=None).api_url == "https://primary.example/api/v3"
+
+
+def test_settings_prefer_full_api_url_to_gh_host(monkeypatch):
+    monkeypatch.setenv(
+        "GH_BABYSITTER_GITHUB_API_URL",
+        "https://primary.example/api/v3",
+    )
+    monkeypatch.setenv("GITHUB_API_URL", "https://fallback.example/api/v3")
+    monkeypatch.setenv("GH_HOST", "github.acme.com")
+
+    assert _config_module().Settings(_env_file=None).api_url == "https://primary.example/api/v3"
+
+
+@pytest.mark.parametrize(
+    ("host", "expected"),
+    [
+        ("github.acme.com", "https://github.acme.com/api/v3"),
+        ("github.com", "https://api.github.com"),
+        ("api.github.com", "https://api.github.com"),
+        ("acme.ghe.com", "https://api.acme.ghe.com"),
+        ("https://github.acme.com/", "https://github.acme.com/api/v3"),
+        ("GITHUB.ACME.COM", "https://github.acme.com/api/v3"),
+    ],
+)
+def test_settings_derive_api_url_from_gh_host(monkeypatch, host, expected):
+    monkeypatch.setenv("GH_HOST", host)
+
+    assert _config_module().Settings(_env_file=None).api_url == expected
+
+
+def test_blank_github_api_url_falls_through_to_gh_host(monkeypatch):
+    monkeypatch.setenv("GITHUB_API_URL", "")
+    monkeypatch.setenv("GH_HOST", "github.acme.com")
+
+    assert _config_module().Settings(_env_file=None).api_url == "https://github.acme.com/api/v3"
+
+
+def test_settings_strip_trailing_slash_from_github_api_url(monkeypatch):
+    monkeypatch.setenv(
+        "GH_BABYSITTER_GITHUB_API_URL",
+        "https://github.acme.com/api/v3/",
+    )
+
+    assert _config_module().Settings(_env_file=None).api_url == "https://github.acme.com/api/v3"
 
 
 def test_settings_prefer_gh_token(monkeypatch):
