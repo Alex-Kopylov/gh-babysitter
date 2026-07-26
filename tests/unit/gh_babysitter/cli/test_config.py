@@ -3,7 +3,7 @@
 from importlib import import_module
 
 import pytest
-from pydantic import SecretStr
+from pydantic import SecretStr, ValidationError
 
 
 @pytest.fixture(autouse=True)
@@ -11,7 +11,9 @@ def _clear_settings_environment(monkeypatch, tmp_path):
     monkeypatch.chdir(tmp_path)
     for name in (
         "GH_BABYSITTER_GITHUB_API_URL",
+        "GH_BABYSITTER_GITHUB_TIMEOUT",
         "GH_BABYSITTER_SERVER",
+        "GH_BABYSITTER_SERVER_TIMEOUT",
         "GITHUB_API_URL",
         "GITHUB_TOKEN",
         "GH_HOST",
@@ -30,6 +32,25 @@ def test_settings_use_defaults():
     assert settings.api_url == "https://api.github.com"
     assert settings.server == "http://localhost:8000"
     assert settings.github_token is None
+    assert settings.server_timeout == 10
+    assert settings.github_timeout == 10
+
+
+def test_settings_read_timeouts_from_environment(monkeypatch):
+    monkeypatch.setenv("GH_BABYSITTER_SERVER_TIMEOUT", "2.5")
+    monkeypatch.setenv("GH_BABYSITTER_GITHUB_TIMEOUT", "30")
+
+    settings = _config_module().Settings(_env_file=None)
+
+    assert settings.server_timeout == 2.5
+    assert settings.github_timeout == 30
+
+
+def test_invalid_timeout_raises_validation_error(monkeypatch):
+    monkeypatch.setenv("GH_BABYSITTER_SERVER_TIMEOUT", "soon")
+
+    with pytest.raises(ValidationError, match="GH_BABYSITTER_SERVER_TIMEOUT"):
+        _config_module().Settings(_env_file=None)
 
 
 def test_settings_use_gh_babysitter_github_api_url(monkeypatch):

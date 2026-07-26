@@ -48,6 +48,14 @@ class Settings(BaseSettings):
         default=None,
         validation_alias=AliasChoices("GH_TOKEN", "GITHUB_TOKEN"),
     )
+    server_timeout: float = Field(
+        default=10,
+        validation_alias="GH_BABYSITTER_SERVER_TIMEOUT",
+    )
+    github_timeout: float = Field(
+        default=10,
+        validation_alias="GH_BABYSITTER_GITHUB_TIMEOUT",
+    )
 
     @computed_field
     @property
