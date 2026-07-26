@@ -171,17 +171,24 @@ async def test_listen_stream_client_disables_read_timeout(monkeypatch):
 
 async def test_listen_github_client_keeps_finite_timeout(monkeypatch):
     calls = []
+    api_url = "https://github.acme.com/api/v3"
 
     monkeypatch.setattr(listen, "resolve_token", lambda: "token")
     monkeypatch.setattr(listen, "satisfied_by_poll", AsyncMock(return_value=True))
 
     result = await listen.listen(
-        listen.ListenOptions(repo="octo/repo", number=42, until="closed"),
+        listen.ListenOptions(
+            repo="octo/repo",
+            number=42,
+            until="closed",
+            api_url=api_url,
+        ),
         lambda **kwargs: calls.append(kwargs) or cast("httpx2.AsyncClient", _Client(_Response())),
     )
 
     timeout = calls[1]["timeout"]
     assert result == 0
+    assert calls[1]["base_url"] == api_url
     assert (timeout.connect, timeout.read, timeout.write, timeout.pool) == (10, 10, 10, 10)
 
 
