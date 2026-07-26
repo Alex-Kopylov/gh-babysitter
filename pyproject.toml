@@ -34,8 +34,6 @@ dev = [
   "prek",
   # YAML linting
   "yamllint",
-  # JSON schema validation
-  "check-jsonschema",
   "pytest-asyncio",
   "anyio",
 ]
