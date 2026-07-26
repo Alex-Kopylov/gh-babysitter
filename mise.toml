@@ -115,7 +115,7 @@ run = "mise exec -- gitleaks git --redact --no-banner"
 
 [tasks.lint-gha-security]
 description = "Scan GitHub Actions workflows for security issues"
-run = "mise exec -- zizmor .github/workflows/ci.yml"
+run = "mise exec -- zizmor .github/workflows/"
 
 [tasks.lint-audit]
 description = "Scan Python dependencies for known CVEs"
