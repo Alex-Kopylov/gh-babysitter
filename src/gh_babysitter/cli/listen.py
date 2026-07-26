@@ -12,18 +12,15 @@ from typing import TYPE_CHECKING, Any
 import httpx2
 import typer
 
-from gh_babysitter.cli.config import DEFAULT_SERVER
+from gh_babysitter.cli.config import DEFAULT_SERVER, get_settings
 from gh_babysitter.cli.sse import parse_sse
 from gh_babysitter.cli.token import resolve_token
 from gh_babysitter.cli.until import UNTIL_MATRIX, satisfied_by_event, satisfied_by_poll
+from gh_babysitter.server.config import DEFAULT_GITHUB_API_URL
 from gh_babysitter.server.events import EVENT_MENU
 
 if TYPE_CHECKING:
     from collections.abc import Callable
-
-_GITHUB_API_URL = "https://api.github.com"
-_SERVER_TIMEOUT = httpx2.Timeout(connect=10, read=None, write=10, pool=10)
-_GITHUB_TIMEOUT = httpx2.Timeout(10)
 
 
 @dataclass(frozen=True)
@@ -39,6 +36,7 @@ class ListenOptions:
     count: int | None = None
     first_event: bool = False
     server: str = DEFAULT_SERVER
+    api_url: str = DEFAULT_GITHUB_API_URL
     format: str = "json"
 
 
@@ -165,13 +163,21 @@ async def listen(
     await asyncio.sleep(0)
     events, count = _validated(options)
     token = resolve_token()
+    settings = get_settings()
+    # An SSE stream stays open indefinitely, so only its read timeout is unbounded.
+    server_timeout = httpx2.Timeout(
+        connect=settings.server_timeout,
+        read=None,
+        write=settings.server_timeout,
+        pool=settings.server_timeout,
+    )
     server_headers = {"Authorization": f"Bearer {token}", "Accept": "text/event-stream"}
     try:
         async with asyncio.timeout(options.timeout):
             async with client_factory(
                 base_url=options.server.rstrip("/"),
                 headers=server_headers,
-                timeout=_SERVER_TIMEOUT,
+                timeout=server_timeout,
             ) as server_client:
                 if options.until:
                     github_headers = {
@@ -179,9 +185,9 @@ async def listen(
                         "Accept": "application/vnd.github+json",
                     }
                     async with client_factory(
-                        base_url=_GITHUB_API_URL,
+                        base_url=options.api_url,
                         headers=github_headers,
-                        timeout=_GITHUB_TIMEOUT,
+                        timeout=httpx2.Timeout(settings.github_timeout),
                     ) as github_client:
                         return await _listen(options, events, count, server_client, github_client)
                 return await _listen(options, events, count, server_client, None)

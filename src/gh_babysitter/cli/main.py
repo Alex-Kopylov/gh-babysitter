@@ -21,6 +21,10 @@ def listen_command(  # ruff:ignore[too-many-arguments, too-many-positional-argum
         str,
         typer.Option("--server", default_factory=lambda: get_settings().server),
     ],
+    api_url: Annotated[
+        str,
+        typer.Option("--api-url", default_factory=lambda: get_settings().api_url),
+    ],
     events: Annotated[str | None, typer.Option("-E", "--events")] = None,
     number: Annotated[int | None, typer.Option("-n", "--number")] = None,
     action: Annotated[str | None, typer.Option("--action")] = None,
@@ -44,6 +48,7 @@ def listen_command(  # ruff:ignore[too-many-arguments, too-many-positional-argum
                 count=count,
                 first_event=first_event,
                 server=server,
+                api_url=api_url,
                 format=output_format,
             )
         )
@@ -56,11 +61,23 @@ def listen_command(  # ruff:ignore[too-many-arguments, too-many-positional-argum
 def setup_command(
     org: Annotated[str, typer.Option("--org")],
     url: Annotated[str, typer.Option("--url")],
+    api_url: Annotated[
+        str,
+        typer.Option("--api-url", default_factory=lambda: get_settings().api_url),
+    ],
     events: Annotated[str | None, typer.Option("-E", "--events")] = None,
     secret: Annotated[str | None, typer.Option("--secret")] = None,
 ) -> None:
     """Create or update an organization webhook."""
-    asyncio.run(setup_webhook(org=org, url=url, events=events, secret=secret))
+    asyncio.run(
+        setup_webhook(
+            org=org,
+            url=url,
+            events=events,
+            secret=secret,
+            api_url=api_url,
+        )
+    )
 
 
 @app.command("serve")

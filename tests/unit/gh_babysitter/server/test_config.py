@@ -20,6 +20,8 @@ def _clear_settings_environment(monkeypatch, tmp_path):
     monkeypatch.chdir(tmp_path)
     for name in _ENV_NAMES:
         monkeypatch.delenv(f"GH_BABYSITTER_{name}", raising=False)
+    monkeypatch.delenv("GITHUB_API_URL", raising=False)
+    monkeypatch.delenv("GH_HOST", raising=False)
 
 
 def test_settings_use_defaults():
@@ -47,12 +49,34 @@ def test_settings_read_all_environment_values(monkeypatch):
 
     assert config.Settings(_env_file=None).model_dump() == {
         "webhook_secret": "secret",
-        "github_api_url": "https://github.example/api/",
+        "github_api_url": "https://github.example/api",
         "auth_cache_ttl": 1,
         "recheck_interval": 2.5,
         "ping_interval": 3,
         "queue_maxsize": 4,
     }
+
+
+def test_github_api_url_strips_surrounding_whitespace(monkeypatch):
+    monkeypatch.setenv(
+        "GH_BABYSITTER_GITHUB_API_URL",
+        "  https://github.example/api  ",
+    )
+
+    assert config.Settings(_env_file=None).github_api_url == "https://github.example/api"
+
+
+def test_blank_github_api_url_uses_default(monkeypatch):
+    monkeypatch.setenv("GH_BABYSITTER_GITHUB_API_URL", " / ")
+
+    assert config.Settings(_env_file=None).github_api_url == "https://api.github.com"
+
+
+@pytest.mark.parametrize("name", ["GITHUB_API_URL", "GH_HOST"])
+def test_server_ignores_bare_github_environment_variables(monkeypatch, name):
+    monkeypatch.setenv(name, "https://github.example/api/v3")
+
+    assert config.Settings(_env_file=None).github_api_url == "https://api.github.com"
 
 
 def test_settings_read_dotenv_file(monkeypatch, tmp_path):

@@ -10,6 +10,7 @@ import pytest
 import typer
 
 from gh_babysitter.cli import listen
+from gh_babysitter.cli.config import Settings
 
 
 class _Response:
@@ -171,18 +172,57 @@ async def test_listen_stream_client_disables_read_timeout(monkeypatch):
 
 async def test_listen_github_client_keeps_finite_timeout(monkeypatch):
     calls = []
+    api_url = "https://github.acme.com/api/v3"
 
     monkeypatch.setattr(listen, "resolve_token", lambda: "token")
     monkeypatch.setattr(listen, "satisfied_by_poll", AsyncMock(return_value=True))
+
+    result = await listen.listen(
+        listen.ListenOptions(
+            repo="octo/repo",
+            number=42,
+            until="closed",
+            api_url=api_url,
+        ),
+        lambda **kwargs: calls.append(kwargs) or cast("httpx2.AsyncClient", _Client(_Response())),
+    )
+
+    timeout = calls[1]["timeout"]
+    assert result == 0
+    assert calls[1]["base_url"] == api_url
+    assert (timeout.connect, timeout.read, timeout.write, timeout.pool) == (10, 10, 10, 10)
+
+
+async def test_listen_clients_use_configured_timeouts(monkeypatch):
+    calls = []
+
+    monkeypatch.setattr(listen, "resolve_token", lambda: "token")
+    monkeypatch.setattr(listen, "satisfied_by_poll", AsyncMock(return_value=True))
+    monkeypatch.setattr(
+        listen,
+        "get_settings",
+        lambda: Settings(_env_file=None, server_timeout=2.5, github_timeout=30),
+    )
 
     result = await listen.listen(
         listen.ListenOptions(repo="octo/repo", number=42, until="closed"),
         lambda **kwargs: calls.append(kwargs) or cast("httpx2.AsyncClient", _Client(_Response())),
     )
 
-    timeout = calls[1]["timeout"]
+    server_timeout, github_timeout = (call["timeout"] for call in calls)
     assert result == 0
-    assert (timeout.connect, timeout.read, timeout.write, timeout.pool) == (10, 10, 10, 10)
+    assert (server_timeout.connect, server_timeout.read, server_timeout.write, server_timeout.pool) == (
+        2.5,
+        None,
+        2.5,
+        2.5,
+    )
+    assert (github_timeout.connect, github_timeout.read, github_timeout.write, github_timeout.pool) == (
+        30,
+        30,
+        30,
+        30,
+    )
 
 
 async def test_listen_resets_backoff_after_a_successful_connection(monkeypatch):
