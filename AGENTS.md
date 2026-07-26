@@ -28,6 +28,10 @@ shared quality gates without documenting the reason.
   run `mise install` before invoking native linters directly.
 - Docker and Hadolint are baseline. The Dockerfile deliberately keeps a
   framework-neutral smoke command until the project chooses a runtime.
+- Hadolint intentionally diverges from the copier template; `copier update`
+  regenerates the LABEL from `.copier-answers.yml` `author_name: Alex Kopylov`.
+- Labels and their DL3051 empty-label enforcement are intentionally removed.
+- Only `ghcr.io` is trusted; a future Docker Hub base fails CI with DL3026.
 - Node-based lint CLIs are pinned in `mise.toml` through mise's npm backend
   and installed with `mise install`.
 

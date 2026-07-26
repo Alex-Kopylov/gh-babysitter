@@ -2,8 +2,6 @@
 
 FROM ghcr.io/astral-sh/uv:0.11.26-trixie-slim
 
-LABEL maintainer="Alex Kopylov" \
-      version="0.1.0"
 WORKDIR /app
 
 ENV PATH="/app/.venv/bin:${PATH}" \
