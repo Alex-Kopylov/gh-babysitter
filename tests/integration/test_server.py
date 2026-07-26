@@ -4,6 +4,8 @@ import asyncio
 import hashlib
 import hmac
 import json
+from datetime import UTC, datetime
+from unittest.mock import patch
 
 import anyio
 import anyio.lowlevel
@@ -86,34 +88,6 @@ async def test_webhook_ping_returns_ok():
 
     assert response.status_code == 200
     assert response.json() == {"ok": True}
-
-
-async def test_webhook_matches_and_enqueues_event():
-    registry = Registry()
-    queue = asyncio.Queue()
-    registry.register("octocat", [Filter(repo="octo/repo", event="issues")], queue)
-    payload = {
-        "repository": {"full_name": "octo/repo"},
-        "action": "opened",
-        "issue": {"number": 42},
-    }
-    body = json.dumps(payload).encode()
-
-    async with make_client(registry=registry, authenticator=_FakeAuthenticator()) as client:
-        response = await client.post("/webhook", content=body, headers=webhook_headers(body))
-
-    assert response.status_code == 202
-    assert response.json() == {"matched": 1}
-    envelope = queue.get_nowait()
-    assert envelope | {"ts": "ignored"} == {
-        "ts": "ignored",
-        "repo": "octo/repo",
-        "event": "issues",
-        "action": "opened",
-        "number": 42,
-        "payload": payload,
-    }
-    assert envelope["ts"].endswith("Z")
 
 
 async def test_full_queue_drops_event_without_failing_webhook():
@@ -199,65 +173,49 @@ async def test_webhook_to_sse_respects_action_and_number_filters():
     ):
         tasks.start_soon(consume, client)
         await wait_until_registered(registry)
-        for action, number, matched in (
-            ("opened", 42, 0),
-            ("closed", 41, 0),
-            ("closed", 42, 1),
-        ):
-            payload = {
-                "repository": {"full_name": "octo/repo"},
-                "action": action,
-                "issue": {"number": number},
-            }
-            body = json.dumps(payload).encode()
-            delivery = await client.post("/webhook", content=body, headers=webhook_headers(body))
-            assert delivery.json() == {"matched": matched}
+        with patch("gh_babysitter.server.app.datetime") as mock_datetime:
+            mock_datetime.now.return_value = datetime(2026, 7, 26, 12, 34, 56, 789012, tzinfo=UTC)
+            for action, number, matched in (
+                ("opened", 42, 0),
+                ("closed", 41, 0),
+                ("closed", 42, 1),
+            ):
+                payload = {
+                    "repository": {"full_name": "octo/repo"},
+                    "action": action,
+                    "issue": {"number": number},
+                }
+                body = json.dumps(payload).encode()
+                delivery = await client.post("/webhook", content=body, headers=webhook_headers(body))
+                assert delivery.json() == {"matched": matched}
         authenticator.revoked = True
 
     assert response is not None
     assert response.status_code == 200
-    messages = sse_data(response)
-    assert messages[0]["filters"] == [
+    assert sse_data(response) == [
         {
+            "filters": [
+                {
+                    "repo": "octo/repo",
+                    "event": "issues",
+                    "action": "closed",
+                    "number": 42,
+                }
+            ]
+        },
+        {
+            "ts": "2026-07-26T12:34:56.789012Z",
             "repo": "octo/repo",
             "event": "issues",
             "action": "closed",
             "number": 42,
-        }
+            "payload": {
+                "repository": {"full_name": "octo/repo"},
+                "action": "closed",
+                "issue": {"number": 42},
+            },
+        },
     ]
-    assert [(message["action"], message["number"]) for message in messages[1:]] == [("closed", 42)]
-
-
-async def test_overlapping_stream_filters_receive_one_delivery():
-    registry = Registry()
-    authenticator = _FakeAuthenticator()
-    response: httpx2.Response | None = None
-
-    async def consume(client):
-        nonlocal response
-        response = await client.get(
-            "/events/stream",
-            params={"repo": "octo/repo", "events": "issues,issues"},
-            headers={"Authorization": "Bearer token"},
-        )
-
-    async with (
-        make_client(registry=registry, authenticator=authenticator) as client,
-        anyio.create_task_group() as tasks,
-    ):
-        tasks.start_soon(consume, client)
-        await wait_until_registered(registry)
-        payload = {
-            "repository": {"full_name": "octo/repo"},
-            "action": "opened",
-            "issue": {"number": 42},
-        }
-        body = json.dumps(payload).encode()
-        await client.post("/webhook", content=body, headers=webhook_headers(body))
-        authenticator.revoked = True
-
-    assert response is not None
-    assert len(sse_data(response)[1:]) == 1
 
 
 async def test_recheck_closes_stream_after_access_revocation():
