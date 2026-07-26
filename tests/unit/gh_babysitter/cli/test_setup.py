@@ -30,12 +30,17 @@ async def test_setup_webhook_creates_hook_and_prints_generated_secret_once(monke
     )
     monkeypatch.setattr(setup.httpx2, "AsyncClient", client_factory)
 
-    await setup.setup_webhook(org="acme", url="https://hooks.example/webhook")
+    await setup.setup_webhook(
+        org="acme",
+        url="https://hooks.example/webhook",
+        api_url="https://github.acme.com/api/v3",
+    )
 
     list_request, request = requests
-    assert list_request.url.path == "/orgs/acme/hooks"
+    assert str(list_request.url) == ("https://github.acme.com/api/v3/orgs/acme/hooks?per_page=100")
     assert dict(list_request.url.params) == {"per_page": "100"}
     assert request.method == "POST"
+    assert str(request.url) == "https://github.acme.com/api/v3/orgs/acme/hooks"
     assert request.headers["Authorization"] == "Bearer token"
     assert request.headers["Accept"] == "application/vnd.github+json"
     assert json.loads(request.content) == {

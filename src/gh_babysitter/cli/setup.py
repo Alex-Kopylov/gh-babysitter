@@ -7,9 +7,8 @@ import httpx2
 import typer
 
 from gh_babysitter.cli.token import resolve_token
+from gh_babysitter.server.config import DEFAULT_GITHUB_API_URL
 from gh_babysitter.server.events import EVENT_MENU
-
-_GITHUB_API_URL = "https://api.github.com"
 
 
 async def setup_webhook(
@@ -17,6 +16,7 @@ async def setup_webhook(
     url: str,
     events: str | None = None,
     secret: str | None = None,
+    api_url: str = DEFAULT_GITHUB_API_URL,
 ) -> None:
     """Create or update an organization webhook and print its secret once."""
     event_names = [event.strip() for event in events.split(",")] if events else sorted(EVENT_MENU)
@@ -37,7 +37,7 @@ async def setup_webhook(
     hook_id = None
     next_url: str | None = f"/orgs/{org}/hooks"
     params: dict[str, int] | None = {"per_page": 100}
-    async with httpx2.AsyncClient(base_url=_GITHUB_API_URL, headers=headers) as client:
+    async with httpx2.AsyncClient(base_url=api_url, headers=headers) as client:
         while next_url:
             response = await client.get(next_url, params=params)
             response.raise_for_status()
