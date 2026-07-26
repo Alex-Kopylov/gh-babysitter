@@ -20,8 +20,8 @@ node = "22.22.0"
 # Python tools managed via uv (installed in venv)
 # Accessible via `uv run <tool>` after `uv sync`
 [tasks.flake8]
-description = "Run flake8 async checks"
-run = "uv run flake8"
+description = "Run flake8 async and Pydantic checks"
+run = "uv run flake8 src"
 
 [tasks.install]
 description = "Install the project and its dependencies"
