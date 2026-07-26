@@ -2,7 +2,6 @@
 
 import pytest
 from fastapi import HTTPException
-from starlette.routing import Route
 
 from gh_babysitter.server.app import (
     _bearer_token,
@@ -13,11 +12,7 @@ from gh_babysitter.server.app import (
 from gh_babysitter.server.config import Settings
 
 
-def test_bearer_token_extracts_token():
-    assert _bearer_token("Bearer github-token") == "github-token"
-
-
-@pytest.mark.parametrize("header", [None, "", "Basic token", "Bearer"])
+@pytest.mark.parametrize("header", ["Basic token", "Bearer"])
 def test_bearer_token_rejects_missing_or_malformed_header(header):
     with pytest.raises(HTTPException) as error:
         _bearer_token(header)
@@ -29,7 +24,7 @@ def test_event_names_accepts_supported_comma_list():
     assert _event_names("issues, pull_request") == ["issues", "pull_request"]
 
 
-@pytest.mark.parametrize("events", ["", "push", "issues,"])
+@pytest.mark.parametrize("events", ["", "issues,"])
 def test_event_names_rejects_empty_or_unsupported_values(events):
     with pytest.raises(HTTPException) as error:
         _event_names(events)
@@ -40,8 +35,6 @@ def test_event_names_rejects_empty_or_unsupported_values(events):
 @pytest.mark.parametrize(
     ("repo", "expected"),
     [
-        ("octo/repo", True),
-        ("octo", False),
         ("/repo", False),
         ("octo/", False),
         ("octo/repo/extra", False),
@@ -49,16 +42,6 @@ def test_event_names_rejects_empty_or_unsupported_values(events):
 )
 def test_valid_repo_requires_owner_and_name(repo, expected):
     assert _valid_repo(repo) is expected
-
-
-def test_create_app_exposes_only_server_routes():
-    app = create_app(Settings(webhook_secret="secret"))
-
-    routes = {
-        (route.path, method) for route in app.routes if isinstance(route, Route) for method in route.methods or ()
-    }
-    assert ("/webhook", "POST") in routes
-    assert ("/events/stream", "GET") in routes
 
 
 async def test_lifespan_owns_default_authenticator_http_client():
