@@ -19,13 +19,17 @@ def test_run_warns_when_webhook_secret_is_unset(monkeypatch, capsys):
     monkeypatch.setattr(
         server_main.uvicorn,
         "run",
-        lambda app, *, host, port: calls.append((app, host, port)),
+        lambda app, **kwargs: calls.append((app, kwargs)),
     )
 
     server_main.run("127.0.0.1", 8000)
 
     assert "GH_BABYSITTER_WEBHOOK_SECRET is unset" in capsys.readouterr().err
-    assert calls[0][1:] == ("127.0.0.1", 8000)
+    assert calls[0][1] == {
+        "host": "127.0.0.1",
+        "port": 8000,
+        "timeout_graceful_shutdown": 5,
+    }
 
 
 def test_run_is_quiet_when_webhook_secret_is_set(monkeypatch, capsys):
