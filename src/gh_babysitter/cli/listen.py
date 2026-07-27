@@ -147,6 +147,10 @@ async def _consume_stream(
             state.ready = True
             print("subscribed", file=sys.stderr)
             continue
+        if event_type == "lag":
+            dropped = json.loads(data)["dropped"]
+            print(f"warning: server dropped {dropped} events (consumer too slow)", file=sys.stderr)
+            continue
         envelope = json.loads(data)
         _print_event(envelope, options.format)
         if options.until and satisfied_by_event(options.until, envelope):
@@ -240,7 +244,13 @@ async def _listen(
             and await satisfied_by_poll(options.until, github_client, options.repo, options.number)
         ):
             return 0
-        await asyncio.sleep(random.uniform(0.8, 1.2) * backoff)  # ruff:ignore[suspicious-non-cryptographic-random-usage]
+        delay = random.uniform(0.8, 1.2) * backoff  # ruff:ignore[suspicious-non-cryptographic-random-usage]
+        reason = outcome.retry_reason or "stream disconnected"
+        print(
+            f"warning: disconnected ({reason}); events during the gap are lost; reconnecting in {delay:.1f}s",
+            file=sys.stderr,
+        )
+        await asyncio.sleep(delay)
         backoff = min(backoff * 2, 30)
 
 

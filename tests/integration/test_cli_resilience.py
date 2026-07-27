@@ -186,3 +186,98 @@ async def test_stream_without_ready_does_not_reset_backoff(monkeypatch):
     assert result == 0
     assert len(requests) == 3
     assert sleeps == [1.0, 2.0]
+
+
+async def test_each_retryable_status_prints_disconnect_warning(monkeypatch, capsys):
+    requests = []
+
+    def handler(request):
+        requests.append(request)
+        if len(requests) < 3:
+            return httpx2.Response(503)
+        return _success_stream()
+
+    monkeypatch.setattr(listen, "resolve_token", lambda: "token")
+    monkeypatch.setattr(listen.asyncio, "sleep", AsyncMock())
+    monkeypatch.setattr(listen.random, "uniform", lambda low, high: 1.0)
+
+    result = await listen.listen(
+        listen.ListenOptions(
+            repo="octo/repo",
+            events="issues",
+            count=1,
+            server="https://babysitter.example",
+        ),
+        _client_factory(handler),
+    )
+
+    stderr = capsys.readouterr().err
+    assert result == 0
+    assert stderr.count("warning: disconnected (server returned 503)") == 2
+    assert "events during the gap are lost; reconnecting in 1.0s" in stderr
+    assert "events during the gap are lost; reconnecting in 2.0s" in stderr
+    assert "subscribed" in stderr
+
+
+async def test_transport_error_prints_disconnect_warning(monkeypatch, capsys):
+    requests = []
+
+    def handler(request):
+        requests.append(request)
+        if len(requests) == 1:
+            raise httpx2.ConnectError("connection refused")
+        return _success_stream()
+
+    monkeypatch.setattr(listen, "resolve_token", lambda: "token")
+    monkeypatch.setattr(listen.asyncio, "sleep", AsyncMock())
+    monkeypatch.setattr(listen.random, "uniform", lambda low, high: 1.0)
+
+    result = await listen.listen(
+        listen.ListenOptions(
+            repo="octo/repo",
+            events="issues",
+            count=1,
+            server="https://babysitter.example",
+        ),
+        _client_factory(handler),
+    )
+
+    assert result == 0
+    assert (
+        "warning: disconnected (connection refused); events during the gap are lost; reconnecting in 1.0s"
+        in capsys.readouterr().err
+    )
+
+
+async def test_lag_event_warns_without_consuming_event_count(monkeypatch, capsys):
+    envelope = {
+        "repo": "octo/repo",
+        "event": "issues",
+        "action": "opened",
+        "number": 42,
+    }
+    content = f'event: ready\ndata: {{}}\n\nevent: lag\ndata: {{"dropped":4}}\n\ndata: {json.dumps(envelope)}\n\n'
+
+    def handler(request):
+        return httpx2.Response(
+            200,
+            headers={"content-type": "text/event-stream"},
+            content=content,
+        )
+
+    monkeypatch.setattr(listen, "resolve_token", lambda: "token")
+
+    result = await listen.listen(
+        listen.ListenOptions(
+            repo="octo/repo",
+            events="issues",
+            count=1,
+            server="https://babysitter.example",
+        ),
+        _client_factory(handler),
+    )
+
+    output = capsys.readouterr()
+    assert result == 0
+    assert output.out == f"{json.dumps(envelope, separators=(',', ':'))}\n"
+    assert "warning: server dropped 4 events (consumer too slow)" in output.err
