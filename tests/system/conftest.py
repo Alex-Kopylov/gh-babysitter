@@ -37,6 +37,24 @@ def _wait_until_ready(server: subprocess.Popen[str], port: int) -> None:
     pytest.fail("uvicorn did not become ready within 5 seconds")
 
 
+def _wait_until_serving(server: subprocess.Popen[str], port: int) -> None:
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline:
+        if server.poll() is not None:
+            stdout, stderr = server.communicate()
+            pytest.fail(f"server exited early ({server.returncode})\nstdout={stdout}\nstderr={stderr}")
+        connection = http.client.HTTPConnection("127.0.0.1", port, timeout=0.2)
+        try:
+            connection.request("GET", "/events/stream?repo=octo%2Frepo&events=issues")
+            if connection.getresponse().status == HTTPStatus.UNAUTHORIZED:
+                return
+        except OSError, http.client.HTTPException:
+            time.sleep(0.02)
+        finally:
+            connection.close()
+    pytest.fail("gh-babysitter server did not become ready within 5 seconds")
+
+
 def _stop_server(server: subprocess.Popen[str]) -> None:
     server.terminate()
     try:
@@ -148,3 +166,42 @@ def popen_cli() -> Iterator[Callable[..., subprocess.Popen[str]]]:
 
     for process in reversed(processes):
         _stop_server(process)
+
+
+@pytest.fixture
+def babysitter_server() -> Iterator[Callable[..., subprocess.Popen[str]]]:
+    """Start the installed server executable directly and clean it up."""
+    servers: list[subprocess.Popen[str]] = []
+
+    def start(
+        port: int,
+        *,
+        env: Mapping[str, str] | None = None,
+    ) -> subprocess.Popen[str]:
+        environment = os.environ.copy()
+        environment["PYTHONPATH"] = str(ROOT)
+        if env is not None:
+            environment.update(env)
+        server = subprocess.Popen(
+            [
+                str(CLI),
+                "serve",
+                "--host",
+                "127.0.0.1",
+                "--port",
+                str(port),
+            ],
+            cwd=ROOT,
+            env=environment,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        servers.append(server)
+        _wait_until_serving(server, port)
+        return server
+
+    yield start
+
+    for server in reversed(servers):
+        _stop_server(server)
