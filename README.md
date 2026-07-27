@@ -260,11 +260,12 @@ its selected repository. The harness first requires the GitHub access matrix
 repository/token pairings produce a prompt server-side `403` without opening
 an event stream.
 
-The scheduled GitHub Actions workflow reads the repository variables
-`E2E_PRIMARY_REPO` and `E2E_SECONDARY_REPO`, plus the encrypted secrets
-`E2E_PRIMARY_TOKEN` and `E2E_SECONDARY_TOKEN`. CI sets
+The scheduled, manual, and internal pull-request GitHub Actions workflow reads
+the repository variables `E2E_PRIMARY_REPO` and `E2E_SECONDARY_REPO`, plus the
+encrypted secrets `E2E_PRIMARY_TOKEN` and `E2E_SECONDARY_TOKEN`. CI sets
 `GH_BABYSITTER_E2E_REQUIRE_NEGATIVE=1`, so missing credentials fail instead of
-silently skipping the security gate.
+silently skipping the security gate. Pull requests from forks do not receive
+the secrets and skip this live job.
 
 ## Design documentation
 

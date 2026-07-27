@@ -311,3 +311,10 @@ def test_ci_pins_the_validated_webhook_extension_release() -> None:
     workflow = WORKFLOW.read_text()
 
     assert "gh extension install cli/gh-webhook --pin v0.2.0" in workflow
+
+
+def test_ci_can_validate_an_internal_pull_request_before_merge() -> None:
+    workflow = WORKFLOW.read_text()
+
+    assert "pull_request:" in workflow
+    assert "github.event.pull_request.head.repo.full_name == github.repository" in workflow

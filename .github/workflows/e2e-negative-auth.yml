@@ -1,6 +1,16 @@
 name: Negative authorization E2E
 
 on:
+  pull_request:
+    paths:
+      - ".github/workflows/e2e-negative-auth.yml"
+      - "mise.toml"
+      - "scripts/configure-e2e-secrets.sh"
+      - "scripts/e2e-lib.sh"
+      - "scripts/e2e.sh"
+      - "src/gh_babysitter/server/app.py"
+      - "src/gh_babysitter/server/auth.py"
+      - "tests/integration/test_e2e_harness.py"
   workflow_dispatch: {}
   schedule:
     - cron: "17 4 * * 1"
@@ -14,6 +24,9 @@ permissions:
 
 jobs:
   e2e:
+    if: >-
+      github.event_name != 'pull_request' ||
+      github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
