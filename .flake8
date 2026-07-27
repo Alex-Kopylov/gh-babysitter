@@ -4,3 +4,7 @@
 
 # Only enable Pydantic and Async rules (other linting via ruff)
 select = PYD,ASYNC
+
+# flake8's built-in excludes omit .venv, so a bare invocation would otherwise
+# scan the whole virtualenv.
+extend-exclude = .venv,.git,__pycache__
