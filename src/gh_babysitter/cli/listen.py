@@ -5,9 +5,11 @@ from __future__ import annotations
 import asyncio
 import json
 import random
+import re
 import sys
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
+from urllib.parse import urlsplit
 
 import httpx2
 import typer
@@ -21,6 +23,8 @@ from gh_babysitter.server.events import EVENT_MENU
 
 if TYPE_CHECKING:
     from collections.abc import Callable
+
+_REPO = re.compile(r"[A-Za-z0-9._-]+/[A-Za-z0-9._-]+")
 
 
 @dataclass(frozen=True)
@@ -40,7 +44,28 @@ class ListenOptions:
     format: str = "json"
 
 
+def _validate_target(options: ListenOptions) -> None:
+    if _REPO.fullmatch(options.repo) is None:
+        message = "--repo must be owner/name using only letters, digits, dots, underscores, and hyphens"
+        raise typer.BadParameter(message)
+    if options.number is not None and options.number < 1:
+        message = "--number must be at least 1"
+        raise typer.BadParameter(message)
+    if options.action is not None and not options.action:
+        message = "--action must not be empty"
+        raise typer.BadParameter(message)
+    try:
+        server_url = urlsplit(options.server)
+        valid_server = server_url.scheme in {"http", "https"} and server_url.hostname is not None
+    except ValueError:
+        valid_server = False
+    if not valid_server:
+        message = "--server must be an http or https URL with a host"
+        raise typer.BadParameter(message)
+
+
 def _validated(options: ListenOptions) -> tuple[list[str], int | None]:
+    _validate_target(options)
     if options.until and options.number is None:
         message = "--until requires --number"
         raise typer.BadParameter(message)

@@ -24,3 +24,9 @@ def test_parse_duration_returns_seconds(value, seconds):
 def test_parse_duration_rejects_invalid_values(value):
     with pytest.raises(typer.BadParameter, match="invalid duration"):
         parse_duration(value)
+
+
+@pytest.mark.parametrize("value", ["0", "0s"])
+def test_parse_duration_rejects_zero(value):
+    with pytest.raises(typer.BadParameter, match="--timeout must be greater than zero"):
+        parse_duration(value)

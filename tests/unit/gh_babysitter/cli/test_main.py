@@ -7,6 +7,7 @@ from unittest.mock import AsyncMock
 import pytest
 from typer.testing import CliRunner
 
+from gh_babysitter.cli import listen as listen_core
 from gh_babysitter.cli import main
 
 runner = CliRunner()
@@ -115,6 +116,62 @@ def test_listen_command_reports_invalid_duration_as_usage_error():
 
     assert result.exit_code == 2
     assert "invalid duration" in result.output
+
+
+@pytest.mark.parametrize(
+    ("args", "message"),
+    [
+        (["-R", "not-a-repo", "-E", "issues"], "--repo must be owner/name"),
+        (["-R", "owner/repo/extra", "-E", "issues"], "--repo must be owner/name"),
+        (["-R", "/repo", "-E", "issues"], "--repo must be owner/name"),
+        (["-R", "owner/", "-E", "issues"], "--repo must be owner/name"),
+        (["-R", "owner/repo!", "-E", "issues"], "--repo must be owner/name"),
+        (["-R", "owner/repo", "-E", "issues", "-n", "0"], "--number must be at least 1"),
+        (["-R", "owner/repo", "-E", "issues", "-n", "-1"], "--number must be at least 1"),
+        (["-R", "owner/repo", "-E", "issues", "--action", ""], "--action must not be empty"),
+        (
+            ["-R", "owner/repo", "-E", "issues", "--server", "babysitter.example"],
+            "--server must be an http or https URL with a host",
+        ),
+        (
+            ["-R", "owner/repo", "-E", "issues", "--server", "ftp://babysitter.example"],
+            "--server must be an http or https URL with a host",
+        ),
+        (
+            ["-R", "owner/repo", "-E", "issues", "--server", "http:///events"],
+            "--server must be an http or https URL with a host",
+        ),
+    ],
+)
+def test_listen_command_rejects_invalid_options_before_creating_client(monkeypatch, args, message):
+    async def invoke(options):
+        return await listen_core.listen(
+            options,
+            client_factory=lambda **kwargs: pytest.fail("client created"),
+        )
+
+    monkeypatch.setattr(main, "listen", invoke)
+    monkeypatch.setattr(listen_core, "resolve_token", lambda: pytest.fail("token resolved"))
+
+    result = runner.invoke(main.app, ["listen", *args])
+
+    assert result.exit_code == 2
+    assert message in result.output
+
+
+@pytest.mark.parametrize("value", ["0", "0s"])
+def test_listen_command_rejects_non_positive_timeout_before_running_core(monkeypatch, value):
+    core = AsyncMock()
+    monkeypatch.setattr(main, "listen", core)
+
+    result = runner.invoke(
+        main.app,
+        ["listen", "-R", "owner/repo", "-E", "issues", "--timeout", value],
+    )
+
+    assert result.exit_code == 2
+    assert "--timeout must be greater than zero" in result.output
+    core.assert_not_awaited()
 
 
 def test_setup_and_serve_commands_delegate(monkeypatch):
