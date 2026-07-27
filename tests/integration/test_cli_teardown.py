@@ -9,6 +9,7 @@ import socket
 import subprocess
 import sys
 import time
+from contextlib import suppress
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -20,11 +21,12 @@ import gh_babysitter.cli.listen as listen_module
 ROOT = Path(__file__).parents[2]
 CLI = Path(sys.executable).with_name("gh-babysitter")
 UVICORN = Path(sys.executable).with_name("uvicorn")
-_STREAM = b'event: ready\ndata: {}\n\ndata: {"repo":"octo/repo","event":"issues","action":"opened","number":42}\n\n'
+_READY = b"event: ready\ndata: {}\n\n"
+_EVENT = b'data: {"repo":"octo/repo","event":"issues","action":"opened","number":42}\n\n'
 
 
 async def app(scope: dict[str, Any], receive: Any, send: Any) -> None:
-    """Serve a health check or one indefinitely open SSE stream."""
+    """Serve a health check or a continuously flowing SSE stream."""
     if scope["path"] == "/health":
         await send({"type": "http.response.start", "status": 204, "headers": []})
         await send({"type": "http.response.body", "body": b""})
@@ -36,9 +38,15 @@ async def app(scope: dict[str, Any], receive: Any, send: Any) -> None:
             "headers": [(b"content-type", b"text/event-stream")],
         }
     )
-    await send({"type": "http.response.body", "body": _STREAM, "more_body": True})
-    while (await receive())["type"] != "http.disconnect":
-        pass
+    await send({"type": "http.response.body", "body": _READY, "more_body": True})
+    # The client must abandon a response that is still actively streaming, which
+    # is what a live SSE feed looks like. Delivering the whole body in one chunk
+    # does not reproduce the httpcore2 teardown bug, so keep the feed flowing
+    # until the client goes away.
+    with suppress(Exception):
+        for _ in range(500):
+            await send({"type": "http.response.body", "body": _EVENT, "more_body": True})
+            await asyncio.sleep(0.01)
 
 
 def _wait_until_ready(server: subprocess.Popen[str], port: int) -> None:
