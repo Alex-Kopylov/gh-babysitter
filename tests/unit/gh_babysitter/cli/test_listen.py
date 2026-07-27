@@ -146,7 +146,87 @@ async def test_listen_treats_server_auth_rejection_as_fatal(monkeypatch, capsys)
     assert "403" in capsys.readouterr().err
 
 
-async def test_listen_stream_client_disables_read_timeout(monkeypatch):
+async def test_listen_refuses_plain_http_to_non_loopback_before_resolving_token(monkeypatch):
+    monkeypatch.setattr(listen, "resolve_token", lambda: pytest.fail("token resolved"))
+
+    with pytest.raises(
+        typer.BadParameter,
+        match="refusing to send a GitHub token over plain HTTP to babysitter.example",
+    ):
+        await listen.listen(
+            listen.ListenOptions(
+                repo="octo/repo",
+                events="issues",
+                server="http://babysitter.example:8000",
+            ),
+        )
+
+
+@pytest.mark.parametrize(
+    "server",
+    [
+        "http://localhost:8000",
+        "http://127.42.0.1:8000",
+        "http://[::1]:8000",
+        "https://babysitter.example",
+    ],
+)
+async def test_listen_allows_secure_or_loopback_server(monkeypatch, server):
+    envelope = {
+        "repo": "octo/repo",
+        "event": "issues",
+        "action": "opened",
+        "number": 42,
+    }
+    monkeypatch.setattr(listen, "resolve_token", lambda: "token")
+
+    result = await listen.listen(
+        listen.ListenOptions(
+            repo="octo/repo",
+            events="issues",
+            count=1,
+            server=server,
+        ),
+        lambda **kwargs: cast(
+            "httpx2.AsyncClient",
+            _Client(_Response(f"data: {json.dumps(envelope)}", "")),
+        ),
+    )
+
+    assert result == 0
+
+
+async def test_listen_allows_explicit_insecure_server(monkeypatch):
+    envelope = {
+        "repo": "octo/repo",
+        "event": "issues",
+        "action": "opened",
+        "number": 42,
+    }
+    monkeypatch.setattr(listen, "resolve_token", lambda: "token")
+    monkeypatch.setattr(
+        listen,
+        "get_settings",
+        lambda: Settings(_env_file=None, insecure=True),
+    )
+
+    result = await listen.listen(
+        listen.ListenOptions(
+            repo="octo/repo",
+            events="issues",
+            count=1,
+            server="http://babysitter.example:8000",
+        ),
+        lambda **kwargs: cast(
+            "httpx2.AsyncClient",
+            _Client(_Response(f"data: {json.dumps(envelope)}", "")),
+        ),
+    )
+
+    assert result == 0
+
+
+async def test_listen_stream_client_uses_bounded_read_timeout(monkeypatch):
     envelope = {
         "ts": "2026-07-20T12:00:00Z",
         "repo": "octo/repo",
@@ -167,7 +247,7 @@ async def test_listen_stream_client_disables_read_timeout(monkeypatch):
 
     timeout = calls[0]["timeout"]
     assert result == 0
-    assert (timeout.connect, timeout.read, timeout.write, timeout.pool) == (10, None, 10, 10)
+    assert (timeout.connect, timeout.read, timeout.write, timeout.pool) == (10, 90, 10, 10)
 
 
 async def test_listen_github_client_keeps_finite_timeout(monkeypatch):
@@ -201,7 +281,12 @@ async def test_listen_clients_use_configured_timeouts(monkeypatch):
     monkeypatch.setattr(
         listen,
         "get_settings",
-        lambda: Settings(_env_file=None, server_timeout=2.5, github_timeout=30),
+        lambda: Settings(
+            _env_file=None,
+            server_timeout=2.5,
+            stream_timeout=75,
+            github_timeout=30,
+        ),
     )
 
     result = await listen.listen(
@@ -213,7 +298,7 @@ async def test_listen_clients_use_configured_timeouts(monkeypatch):
     assert result == 0
     assert (server_timeout.connect, server_timeout.read, server_timeout.write, server_timeout.pool) == (
         2.5,
-        None,
+        75,
         2.5,
         2.5,
     )

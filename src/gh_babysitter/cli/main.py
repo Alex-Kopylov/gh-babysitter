@@ -1,10 +1,13 @@
 """Typer command wiring for gh-babysitter."""
 
 import asyncio
+import sys
+from importlib.metadata import version as distribution_version
 from typing import Annotated
 
 import typer
 
+import gh_babysitter
 from gh_babysitter.cli.config import get_settings
 from gh_babysitter.cli.durations import parse_duration
 from gh_babysitter.cli.listen import ListenOptions, listen
@@ -12,6 +15,24 @@ from gh_babysitter.cli.setup import setup_webhook
 from gh_babysitter.server.main import run as run_server
 
 app = typer.Typer(no_args_is_help=True)
+
+
+def _version_callback(value: bool) -> None:
+    if not value:
+        return
+    package_version = getattr(gh_babysitter, "__version__", None)
+    typer.echo(package_version if isinstance(package_version, str) else distribution_version("gh_babysitter"))
+    raise typer.Exit
+
+
+@app.callback()
+def app_callback(
+    version: Annotated[
+        bool,
+        typer.Option("--version", callback=_version_callback, is_eager=True),
+    ] = False,
+) -> None:
+    """Run gh-babysitter commands."""
 
 
 @app.command("listen")
@@ -66,9 +87,19 @@ def setup_command(
         typer.Option("--api-url", default_factory=lambda: get_settings().api_url),
     ],
     events: Annotated[str | None, typer.Option("-E", "--events")] = None,
-    secret: Annotated[str | None, typer.Option("--secret")] = None,
+    secret_stdin: Annotated[bool, typer.Option("--secret-stdin")] = False,
 ) -> None:
     """Create or update an organization webhook."""
+    secret = None
+    if secret_stdin:
+        secret = sys.stdin.read().strip()
+        if not secret:
+            message = "stdin secret must not be empty"
+            raise typer.BadParameter(message, param_hint="--secret-stdin")
+    else:
+        configured_secret = get_settings().webhook_secret
+        if configured_secret is not None:
+            secret = configured_secret.get_secret_value()
     asyncio.run(
         setup_webhook(
             org=org,
