@@ -344,6 +344,79 @@ class TestBurstOrdering:
         assert registry.connections == {}
 
 
+class TestSubscriberFanOut:
+    """Fan-out and exclusion behavior across concurrent listeners."""
+
+    async def test_two_listeners_receive_match_but_exclude_other_event_and_repo(
+        self,
+        fake_authenticator,
+        make_app,
+        deliver,
+    ):
+        """Deliver once per matching listener without crossing filter boundaries."""
+        registry = Registry()
+        app = make_app(
+            registry=registry,
+            authenticator=fake_authenticator,
+            queue_maxsize=1,
+        )
+        request = Request(
+            {
+                "type": "http",
+                "method": "GET",
+                "path": "/events/stream",
+                "headers": [(b"authorization", b"Bearer token")],
+                "query_string": b"",
+                "app": app,
+            }
+        )
+        first = await _stream(request, repo="octo/repo", events="issues")
+        second = await _stream(request, repo="octo/repo", events="issues")
+        await anext(first.body_iterator)
+        await anext(second.body_iterator)
+
+        matching = await deliver(
+            app,
+            "issues",
+            {
+                "repository": {"full_name": "octo/repo"},
+                "action": "closed",
+                "issue": {"number": 42},
+            },
+        )
+        other_event = await deliver(
+            app,
+            "release",
+            {
+                "repository": {"full_name": "octo/repo"},
+                "action": "published",
+                "release": {"id": 7},
+            },
+        )
+        other_repo = await deliver(
+            app,
+            "issues",
+            {
+                "repository": {"full_name": "other/repo"},
+                "action": "closed",
+                "issue": {"number": 42},
+            },
+        )
+
+        assert matching.json() == {"matched": 2, "delivered": 2, "dropped": 0}
+        assert other_event.json() == {"matched": 0, "delivered": 0, "dropped": 0}
+        assert other_repo.json() == {"matched": 0, "delivered": 0, "dropped": 0}
+
+        first_frame = await anext(first.body_iterator)
+        second_frame = await anext(second.body_iterator)
+        await first.body_iterator.aclose()
+        await second.body_iterator.aclose()
+
+        assert json.loads(first_frame["data"])["number"] == 42
+        assert second_frame == first_frame
+        assert registry.connections == {}
+
+
 async def test_recheck_closes_stream_after_access_revocation(
     make_client,
     fake_authenticator,
