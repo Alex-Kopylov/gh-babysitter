@@ -6,7 +6,8 @@ importantly, **power**.
 
 ## The actual problem is power, not layout
 
-Mutation testing against shipped v1.0 behaviour: **seven mutations pass 224 green tests unchanged.**
+Mutation testing against shipped v1.0 behaviour originally reported eight surviving mutations.
+Three are false positives, leaving **five effective mutations that passed 224 green tests unchanged.**
 
 | Mutation | Source | Scenario |
 |---|---|---|
@@ -14,10 +15,16 @@ Mutation testing against shipped v1.0 behaviour: **seven mutations pass 224 gree
 | Stop sending the `number` filter | `cli/listen.py:249-250` | 8 |
 | Stop sending the `action` filter | `cli/listen.py:251-252` | 14 |
 | Disable the SSE `: ping` keepalive | `server/app.py:187` | 23 |
-| `ensure_ascii=True` when encoding envelopes (server) | `server/app.py:183` | 26 |
-| `ensure_ascii=True` when encoding envelopes (CLI) | `cli/listen.py:162` | 26 |
+| `ensure_ascii=True` when encoding envelopes (server) | `server/app.py:183` | False positive |
+| `ensure_ascii=True` when encoding envelopes (CLI) | `cli/listen.py:162` | False positive |
 | `flush=False` on stdout writes | `cli/listen.py:162` | 16 |
-| Reverse subscriber match order | `server/registry.py:95` | 16 |
+| Reverse subscriber match order | `server/registry.py:95` | False positive |
+
+The `ensure_ascii=True` rows are no-ops because `True` is already `json.dumps`'s default. Reversing
+subscriber traversal is also unobservable: each subscriber has an independent queue, every
+`put_nowait` is attempted without yielding, and the webhook response exposes only commutative
+`matched` / `delivered` / `dropped` totals. Queue pressure and loss accounting remain local to the
+same subscriber regardless of traversal order.
 
 The first is the worst: it is the **documented mitigation for the reconnect blind window**, the reason
 scenario 19 is considered acceptable at all. Verified independently — deleting the block leaves 224
@@ -99,9 +106,10 @@ Cheap tiers only. Each item must fail when the named source line is reverted.
 7. CLI actually sends `number` and `action` — unit assertion on the outgoing query params, plus one
    ASGI end-to-end. Closes scenario 14.
 8. Server emits `: ping` — ASGI with `ping_interval=0.05`. Half of 23.
-9. Unicode / newline / ANSI / ~1MB body round-trip, including a payload containing a literal
-   `data: ` line and `\n\n` — the SSE-injection case. Unit + ASGI. Closes 26.
-10. Burst ordering — ASGI. Half of 16.
+9. **Skipped as a false-positive mutation.** Explicit `ensure_ascii=True` is byte-identical to the
+   existing calls because it is the `json.dumps` default.
+10. Burst ordering — ASGI. Half of 16. The reverse-subscriber-sort mutation is separately skipped as
+    false positive because subscriber traversal order has no observable effect.
 11. Two-listener fan-out, non-matching exclusion, second-repo exclusion — ASGI. Closes 10, most of 7.
 12. 50 subscribers × 100 events — ASGI. Closes 28.
 13. Issue-vs-PR reverse matrix — unit. Closes 9.

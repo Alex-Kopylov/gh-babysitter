@@ -291,6 +291,59 @@ async def test_webhook_to_sse_respects_action_and_number_filters(
     ]
 
 
+class TestBurstOrdering:
+    """Delivery order for a burst buffered by one subscriber."""
+
+    async def test_single_subscriber_receives_burst_in_delivery_order(
+        self,
+        fake_authenticator,
+        make_app,
+        deliver,
+    ):
+        """Preserve webhook arrival order while draining a buffered burst."""
+        event_count = 10
+        registry = Registry()
+        app = make_app(
+            registry=registry,
+            authenticator=fake_authenticator,
+            queue_maxsize=event_count,
+        )
+        request = Request(
+            {
+                "type": "http",
+                "method": "GET",
+                "path": "/events/stream",
+                "headers": [(b"authorization", b"Bearer token")],
+                "query_string": b"",
+                "app": app,
+            }
+        )
+        stream = await _stream(request, repo="octo/repo", events="issues")
+        ready = await anext(stream.body_iterator)
+
+        deliveries = [
+            await deliver(
+                app,
+                "issues",
+                {
+                    "repository": {"full_name": "octo/repo"},
+                    "action": "opened",
+                    "issue": {"number": number},
+                },
+            )
+            for number in range(event_count)
+        ]
+        frames = [await anext(stream.body_iterator) for _ in range(event_count)]
+        await stream.body_iterator.aclose()
+
+        assert ready["event"] == "ready"
+        assert [delivery.json() for delivery in deliveries] == [
+            {"matched": 1, "delivered": 1, "dropped": 0}
+        ] * event_count
+        assert [json.loads(frame["data"])["number"] for frame in frames] == list(range(event_count))
+        assert registry.connections == {}
+
+
 async def test_recheck_closes_stream_after_access_revocation(
     make_client,
     fake_authenticator,
