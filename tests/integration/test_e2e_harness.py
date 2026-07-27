@@ -318,3 +318,11 @@ def test_ci_can_validate_an_internal_pull_request_before_merge() -> None:
 
     assert "pull_request:" in workflow
     assert "github.event.pull_request.head.repo.full_name == github.repository" in workflow
+
+
+def test_ci_is_repeatable_without_a_calendar_schedule() -> None:
+    workflow = WORKFLOW.read_text()
+
+    assert "workflow_dispatch:" in workflow
+    assert "\n  schedule:" not in workflow
+    assert "cron:" not in workflow
