@@ -9,7 +9,7 @@
 Упаковка как **gh-расширение** (паттерн [cli/gh-webhook](04-github-webhook.md#разбор-cligh-webhook)):
 
 ```
-gh extension install my-org/gh-babysitter
+gh extension install Alex-Kopylov/gh-babysitter
 gh babysitter --help
 ```
 
@@ -26,17 +26,37 @@ gh babysitter listen -R org/api -E issues                    # все issues р�
 gh babysitter listen -R org/api -E issues -n 42              # только issue #42
 gh babysitter listen -R org/api -E issues,pull_request       # несколько типов разом
 gh babysitter listen -R org/web -n 24 --until merged --timeout 12h  # агентный сценарий
-gh babysitter listen -R org/api -E issues | jq '.payload.issue.title'
+gh babysitter listen -R org/api -E issues | jaq '.payload.issue.title'
 ```
 
 Механика:
 
 1. При старте CLI подключается к `GET /events/stream`, передав подписки параметрами запроса; сервер в этот же момент проверяет доступ к репозиторию ([auth](03-auth.md#точка-проверки-прав)) и начинает стримить.
 2. События печатаются как JSON lines в stdout ([формат](02-delivery.md#формат-события)); `--format pretty` — человекочитаемо.
-3. Обрыв → реконнект с бэкоффом; подписки переобъявляются из тех же argv — диск не участвует.
+3. Обрыв или retryable-ответ → предупреждение в stderr и реконнект с экспоненциальным бэкоффом; подписки переобъявляются из тех же argv — диск не участвует. Бэкофф сбрасывается только после SSE-события `ready`.
 4. Ctrl+C / kill / конец сессии агента = unsubscribe: соединение закрылось — подписок больше нет ([delivery](02-delivery.md#жизненный-цикл-подписки)).
 
 Одно соединение покрывает один репозиторий (+ опциональный номер) × несколько типов событий. Ещё один репозиторий или номер — ещё один процесс `listen` в соседнем терминале / сессии агента; группирующих повторяемых флагов сознательно нет.
+
+Каждый реконнект предваряется строкой:
+
+```text
+warning: disconnected (<reason>); events during the gap are lost; reconnecting in 1.0s
+```
+
+Причина содержит transport/read-timeout либо retryable HTTP-статус. `408`, `425`, `429` и любой `5xx` повторяются; прочий `4xx` — постоянная ошибка, его JSON-поле `detail` выводится в stderr и процесс завершается с кодом `1` после одного запроса. `401`/`403` также завершают процесс с кодом `1`. Серверное событие `lag` не попадает в stdout: CLI пишет `warning: server dropped N events (consumer too slow)` в stderr и продолжает стрим.
+
+### Локальная валидация
+
+Все ошибки проверяются до получения токена и открытия сокета, оформляются как `BadParameter` и завершаются с кодом `2`:
+
+- `--repo` имеет вид `owner/name`: ровно один `/`, обе части непустые, допустимы только `[A-Za-z0-9._-]`;
+- `--number >= 1`;
+- `--timeout > 0`, включая строковые формы `0` и `0s`;
+- заданный `--action` непустой;
+- `--server` — `http`/`https` URL с host.
+
+CLI не отправляет GitHub-токен по `http://` на non-loopback host. `localhost`, `127.0.0.0/8` и `::1` разрешены для разработки; для прочих host требуется HTTPS либо явный `GH_BABYSITTER_INSECURE=1`.
 
 ### Exit-условия
 
@@ -51,7 +71,16 @@ gh babysitter listen -R org/api -E issues | jq '.payload.issue.title'
 
 Без exit-флагов `listen` стримит бесконечно (человеческий режим). Флаги комбинируются: `--until merged --timeout 12h` — «жди мёржа, но не дольше 12 часов».
 
-#### Матрица `--until` (черновик)
+Коды процесса:
+
+| Код | Значение |
+|---:|---|
+| `0` | Условие `--until`, `--count` или `--first-event` выполнено |
+| `1` | Runtime-ошибка: токен отклонён, подписка навсегда отвергнута, ошибка протокола |
+| `2` | Ошибка использования: невалидные флаги, repo, число или таймаут |
+| `124` | Истёк `--timeout` |
+
+#### Матрица `--until`
 
 Терминальные статусы зависят от типа события:
 
@@ -68,7 +97,25 @@ gh babysitter listen -R org/api -E issues | jq '.payload.issue.title'
 
 ### `setup` (админская)
 
-Одноразовая команда org-админа — создаёт/обновляет org-webhook с [allowlist](04-github-webhook.md#статический-allowlist) и секретом, используя собственный токен админа. Подробности — в [github-webhook](04-github-webhook.md#настройка).
+Одноразовая команда org-админа — создаёт/обновляет org-webhook с [allowlist](04-github-webhook.md#статический-allowlist) и секретом, используя собственный токен админа. `--secret <value>` отсутствует: секрет в argv виден через `ps` и остаётся в истории shell.
+
+Источники секрета в порядке приоритета:
+
+1. `--secret-stdin` — прочитать и обрезать весь stdin; пустой ввод → `BadParameter`.
+2. `GH_BABYSITTER_WEBHOOK_SECRET`.
+3. Новый случайный секрет.
+
+Секрет из stdin или env не выводится: команда пишет `webhook configured; reusing the supplied GH_BABYSITTER_WEBHOOK_SECRET`. Сгенерированный секрет печатается один раз, потому что другой его копии нет. Подробности — в [github-webhook](04-github-webhook.md#настройка).
+
+### `serve`
+
+Запускает один процесс uvicorn с сервером из того же дистрибутива:
+
+```text
+gh babysitter serve --host 0.0.0.0 --port 8000
+```
+
+Отдельный серверный пакет не нужен.
 
 ## Конвенции флагов
 
@@ -109,10 +156,14 @@ Exit-флаги (`--until`, `--timeout`, `--count`, `--first-event`) — наш�
 | Переменная | По умолчанию | На что влияет |
 |---|---|---|
 | `GH_BABYSITTER_SERVER_TIMEOUT` | `10` | connect/write/pool для соединения с сервером |
+| `GH_BABYSITTER_STREAM_TIMEOUT` | `90` | read для SSE-потока |
 | `GH_BABYSITTER_GITHUB_TIMEOUT` | `10` | все таймауты запросов к GitHub API |
 
-Секунды. Read-таймаут SSE-потока не настраивается и всегда безграничен: соединение
-живёт, пока живёт подписка ([delivery](02-delivery.md#жизненный-цикл-подписки)).
+Секунды. Read-таймаут SSE-потока ограничен и настраивается: значение по умолчанию
+90 секунд выдерживает три пропущенных серверных ping с интервалом 30 секунд.
+Истечение считается временным обрывом, выдаёт предупреждение и запускает
+реконнект. Без границы graceful shutdown сервера мог оставить `listen` навсегда
+заблокированным на полумёртвом сокете.
 
 ## Эфемерная модель подписок
 
