@@ -82,7 +82,12 @@ async def _webhook(request: Request) -> Response:
     if github_event == "ping":
         return JSONResponse({"ok": True})
 
-    payload: dict[str, Any] = await request.json()
+    try:
+        payload = json.loads(body)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Malformed JSON payload") from None
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=400, detail="Payload must be a JSON object")
     norm = normalize(github_event, payload)
     if norm is None:
         return Response(status_code=204)

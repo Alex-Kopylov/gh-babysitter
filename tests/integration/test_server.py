@@ -80,6 +80,32 @@ async def test_webhook_rejects_bad_hmac_before_parsing_json():
     assert response.status_code == 401
 
 
+@pytest.mark.parametrize(
+    ("body", "detail"),
+    [
+        (b"{", "Malformed JSON payload"),
+        (b"", "Malformed JSON payload"),
+        (b"null", "Payload must be a JSON object"),
+        (b"[]", "Payload must be a JSON object"),
+        (b'"str"', "Payload must be a JSON object"),
+        (b"42", "Payload must be a JSON object"),
+    ],
+)
+async def test_webhook_rejects_invalid_json_and_remains_healthy(body, detail):
+    ping_body = b"{}"
+    async with make_client(authenticator=_FakeAuthenticator()) as client:
+        response = await client.post("/webhook", content=body, headers=webhook_headers(body))
+        ping = await client.post(
+            "/webhook",
+            content=ping_body,
+            headers=webhook_headers(ping_body, event="ping"),
+        )
+
+    assert response.status_code == 400
+    assert response.json() == {"detail": detail}
+    assert ping.status_code == 200
+
+
 async def test_webhook_rejects_requests_when_secret_is_unset():
     app = create_app(Settings(webhook_secret=None), authenticator=_FakeAuthenticator())
     async with httpx2.AsyncClient(transport=httpx2.ASGITransport(app=app), base_url="http://test") as client:
