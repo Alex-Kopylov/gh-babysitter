@@ -118,3 +118,33 @@ def run_cli() -> Callable[..., subprocess.CompletedProcess[str]]:
         )
 
     return run
+
+
+@pytest.fixture
+def popen_cli() -> Iterator[Callable[..., subprocess.Popen[str]]]:
+    """Start installed CLI processes with piped output and clean them up."""
+    processes: list[subprocess.Popen[str]] = []
+
+    def start(
+        *args: str,
+        env: Mapping[str, str] | None = None,
+    ) -> subprocess.Popen[str]:
+        environment = os.environ.copy()
+        environment["PYTHONPATH"] = str(ROOT)
+        if env is not None:
+            environment.update(env)
+        process = subprocess.Popen(
+            [str(CLI), *args],
+            cwd=ROOT,
+            env=environment,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        processes.append(process)
+        return process
+
+    yield start
+
+    for process in reversed(processes):
+        _stop_server(process)
