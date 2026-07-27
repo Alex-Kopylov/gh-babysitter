@@ -1,12 +1,14 @@
 """Tests for Typer command wiring and the gh extension entry point."""
 
 import tomllib
+from importlib.metadata import version as distribution_version
 from pathlib import Path
 from unittest.mock import AsyncMock
 
 import pytest
 from typer.testing import CliRunner
 
+import gh_babysitter
 from gh_babysitter.cli import listen as listen_core
 from gh_babysitter.cli import main
 
@@ -27,6 +29,24 @@ def test_app_exposes_all_commands():
 
     assert result.exit_code == 0
     assert all(command in result.stdout for command in ("listen", "setup", "serve"))
+
+
+def test_version_flag_prefers_package_version(monkeypatch):
+    monkeypatch.setattr(gh_babysitter, "__version__", "1.0.0", raising=False)
+
+    result = runner.invoke(main.app, ["--version"])
+
+    assert result.exit_code == 0
+    assert result.stdout == "1.0.0\n"
+
+
+def test_version_flag_falls_back_to_distribution_metadata(monkeypatch):
+    monkeypatch.delattr(gh_babysitter, "__version__", raising=False)
+
+    result = runner.invoke(main.app, ["--version"])
+
+    assert result.exit_code == 0
+    assert result.stdout == f"{distribution_version('gh_babysitter')}\n"
 
 
 def test_listen_command_maps_flags_and_returns_core_exit_code(monkeypatch):

@@ -2,10 +2,12 @@
 
 import asyncio
 import sys
+from importlib.metadata import version as distribution_version
 from typing import Annotated
 
 import typer
 
+import gh_babysitter
 from gh_babysitter.cli.config import get_settings
 from gh_babysitter.cli.durations import parse_duration
 from gh_babysitter.cli.listen import ListenOptions, listen
@@ -13,6 +15,24 @@ from gh_babysitter.cli.setup import setup_webhook
 from gh_babysitter.server.main import run as run_server
 
 app = typer.Typer(no_args_is_help=True)
+
+
+def _version_callback(value: bool) -> None:
+    if not value:
+        return
+    package_version = getattr(gh_babysitter, "__version__", None)
+    typer.echo(package_version if isinstance(package_version, str) else distribution_version("gh_babysitter"))
+    raise typer.Exit
+
+
+@app.callback()
+def app_callback(
+    version: Annotated[
+        bool,
+        typer.Option("--version", callback=_version_callback, is_eager=True),
+    ] = False,
+) -> None:
+    """Run gh-babysitter commands."""
 
 
 @app.command("listen")
