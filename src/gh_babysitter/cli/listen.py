@@ -8,6 +8,7 @@ import random
 import re
 import sys
 from dataclasses import dataclass
+from ipaddress import ip_address
 from typing import TYPE_CHECKING, Any
 from urllib.parse import urlsplit
 
@@ -61,6 +62,20 @@ def _validate_target(options: ListenOptions) -> None:
         valid_server = False
     if not valid_server:
         message = "--server must be an http or https URL with a host"
+        raise typer.BadParameter(message)
+
+
+def _guard_token_transport(server: str, *, insecure: bool) -> None:
+    server_url = urlsplit(server)
+    host = server_url.hostname or ""
+    try:
+        loopback = host == "localhost" or ip_address(host).is_loopback
+    except ValueError:
+        loopback = host == "localhost"
+    if server_url.scheme == "http" and not loopback and not insecure:
+        message = (
+            f"refusing to send a GitHub token over plain HTTP to {host}; use https:// or set GH_BABYSITTER_INSECURE=1"
+        )
         raise typer.BadParameter(message)
 
 
@@ -187,8 +202,10 @@ async def listen(
     """Listen for matching server events until an exit condition is met."""
     await asyncio.sleep(0)
     events, count = _validated(options)
-    token = resolve_token()
     settings = get_settings()
+    if client_factory is httpx2.AsyncClient:
+        _guard_token_transport(options.server, insecure=settings.insecure)
+    token = resolve_token()
     # An SSE stream stays open indefinitely, so only its read timeout is unbounded.
     server_timeout = httpx2.Timeout(
         connect=settings.server_timeout,

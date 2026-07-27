@@ -48,6 +48,10 @@ class Settings(BaseSettings):
         default=None,
         validation_alias=AliasChoices("GH_TOKEN", "GITHUB_TOKEN"),
     )
+    insecure: bool = Field(
+        default=False,
+        validation_alias="GH_BABYSITTER_INSECURE",
+    )
     server_timeout: float = Field(
         default=10,
         validation_alias="GH_BABYSITTER_SERVER_TIMEOUT",

@@ -12,6 +12,7 @@ def _clear_settings_environment(monkeypatch, tmp_path):
     for name in (
         "GH_BABYSITTER_GITHUB_API_URL",
         "GH_BABYSITTER_GITHUB_TIMEOUT",
+        "GH_BABYSITTER_INSECURE",
         "GH_BABYSITTER_SERVER",
         "GH_BABYSITTER_SERVER_TIMEOUT",
         "GITHUB_API_URL",
@@ -32,8 +33,15 @@ def test_settings_use_defaults():
     assert settings.api_url == "https://api.github.com"
     assert settings.server == "http://localhost:8000"
     assert settings.github_token is None
+    assert settings.insecure is False
     assert settings.server_timeout == 10
     assert settings.github_timeout == 10
+
+
+def test_settings_allow_explicit_insecure_transport(monkeypatch):
+    monkeypatch.setenv("GH_BABYSITTER_INSECURE", "1")
+
+    assert _config_module().Settings(_env_file=None).insecure is True
 
 
 def test_settings_read_timeouts_from_environment(monkeypatch):
