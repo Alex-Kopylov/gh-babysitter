@@ -417,6 +417,54 @@ class TestSubscriberFanOut:
         assert registry.connections == {}
 
 
+class TestSubscriberFanOutLoad:
+    """Fan-out behavior across many subscribers and events."""
+
+    async def test_fifty_subscribers_each_receive_one_hundred_events(
+        self,
+        fake_authenticator,
+        make_app,
+        deliver,
+    ):
+        """Deliver the complete ordered event set without a fan-out ceiling."""
+        await anyio.lowlevel.checkpoint()
+        subscriber_count = 50
+        event_count = 100
+        registry = Registry()
+        subscribers = [Subscriber(asyncio.Queue(maxsize=event_count)) for _ in range(subscriber_count)]
+        for subscriber in subscribers:
+            registry.register(
+                "octocat",
+                [Filter(repo="octo/repo", event="issues")],
+                subscriber,
+            )
+        app = make_app(registry=registry, authenticator=fake_authenticator)
+
+        deliveries = [
+            await deliver(
+                app,
+                "issues",
+                {
+                    "repository": {"full_name": "octo/repo"},
+                    "action": "opened",
+                    "issue": {"number": number},
+                },
+            )
+            for number in range(event_count)
+        ]
+
+        assert [delivery.json() for delivery in deliveries] == [
+            {
+                "matched": subscriber_count,
+                "delivered": subscriber_count,
+                "dropped": 0,
+            }
+        ] * event_count
+        assert [
+            [subscriber.queue.get_nowait()["number"] for _ in range(event_count)] for subscriber in subscribers
+        ] == [list(range(event_count))] * subscriber_count
+
+
 async def test_recheck_closes_stream_after_access_revocation(
     make_client,
     fake_authenticator,
