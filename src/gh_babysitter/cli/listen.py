@@ -30,6 +30,7 @@ _RETRYABLE_STATUS = frozenset({408, 425, 429, 500, 502, 503, 504})
 _HTTP_CLIENT_ERROR = 400
 _HTTP_SERVER_ERROR = 500
 _HTTP_STATUS_LIMIT = 600
+_ASYNCGEN_SHUTDOWN_ERROR = "generator didn't stop after athrow()"
 
 
 @dataclass(frozen=True)
@@ -59,6 +60,31 @@ class _Outcome:
 class _StreamState:
     remaining: int | None
     ready: bool = False
+
+
+def _install_httpcore2_shutdown_workaround(loop: asyncio.AbstractEventLoop) -> None:
+    # Work around httpcore2 2.7.0: httpcore2/_async/http11.py:311 catches
+    # GeneratorExit via `except BaseException`, then awaits. Delete when upstream fixes it.
+    previous_handler = loop.get_exception_handler()
+
+    def handle_exception(current_loop: asyncio.AbstractEventLoop, context: dict[str, Any]) -> None:
+        exception = context.get("exception")
+        asyncgen = context.get("asyncgen")
+        code = getattr(asyncgen, "ag_code", None)
+        filename = getattr(code, "co_filename", "")
+        if (
+            isinstance(exception, RuntimeError)
+            and str(exception) == _ASYNCGEN_SHUTDOWN_ERROR
+            and isinstance(filename, str)
+            and "httpcore2" in filename
+        ):
+            return
+        if previous_handler is None:
+            current_loop.default_exception_handler(context)
+        else:
+            previous_handler(current_loop, context)
+
+    loop.set_exception_handler(handle_exception)
 
 
 def _validate_target(options: ListenOptions) -> None:
@@ -259,6 +285,7 @@ async def listen(
     client_factory: Callable[..., httpx2.AsyncClient] = httpx2.AsyncClient,
 ) -> int:
     """Listen for matching server events until an exit condition is met."""
+    _install_httpcore2_shutdown_workaround(asyncio.get_running_loop())
     await asyncio.sleep(0)
     events, count = _validated(options)
     settings = get_settings()
