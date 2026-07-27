@@ -135,6 +135,51 @@ async def test_transport_failure_is_not_cached(failure_path):
     assert len(requests) == failed_call_count + 2
 
 
+@pytest.mark.parametrize("failure_path", ["/user", "/repos/octo/repo"])
+@pytest.mark.parametrize("failure_status", [500, None])
+async def test_unavailable_fresh_check_evicts_cached_verdict(failure_path, failure_status):
+    client, requests, recovered = make_recovering_client(
+        failure_path=failure_path,
+        failure_status=failure_status,
+    )
+    recovered[0] = True
+    async with client:
+        authenticator = GitHubAuthenticator("https://api.example", 300, client)
+
+        assert await authenticator.verify("token", "octo/repo") == Access(Verdict.ALLOWED, "octocat")
+        recovered[0] = False
+        assert await authenticator.verify("token", "octo/repo", fresh=True) == Access(Verdict.UNAVAILABLE)
+        recovered[0] = True
+        assert await authenticator.verify("token", "octo/repo") == Access(Verdict.ALLOWED, "octocat")
+
+    expected_calls = 5 if failure_path == "/user" else 6
+    assert len(requests) == expected_calls
+
+
+@pytest.mark.parametrize("content", [b"{", b"[]"])
+async def test_invalid_user_payload_is_unavailable_and_not_cached(content):
+    requests = []
+    recovered = [False]
+
+    def handler(request):
+        requests.append(request)
+        if request.url.path == "/user" and not recovered[0]:
+            return httpx2.Response(200, content=content)
+        if request.url.path == "/user":
+            return httpx2.Response(200, json={"login": "octocat"})
+        return httpx2.Response(200)
+
+    client = httpx2.AsyncClient(transport=httpx2.MockTransport(handler))
+    async with client:
+        authenticator = GitHubAuthenticator("https://api.example", 300, client)
+
+        assert await authenticator.verify("token", "octo/repo") == Access(Verdict.UNAVAILABLE)
+        recovered[0] = True
+        assert await authenticator.verify("token", "octo/repo") == Access(Verdict.ALLOWED, "octocat")
+
+    assert len(requests) == 3
+
+
 async def test_cache_hit_avoids_second_github_call():
     client, requests = make_client()
     async with client:

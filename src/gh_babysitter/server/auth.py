@@ -59,6 +59,14 @@ class GitHubAuthenticator:
         self.client = client
         self._cache: dict[tuple[str, str], tuple[float, Access]] = {}
 
+    def _record(self, key: tuple[str, str], access: Access) -> Access:
+        """Update the cache for a live verification result."""
+        if access.verdict is Verdict.UNAVAILABLE:
+            self._cache.pop(key, None)
+        else:
+            self._cache[key] = (monotonic() + self.cache_ttl, access)
+        return access
+
     async def verify(self, token: str, repo: str, *, fresh: bool = False) -> Access:
         """Return an explicit repository-access verdict."""
         await asyncio.sleep(0)
@@ -75,22 +83,26 @@ class GitHubAuthenticator:
         try:
             user_response = await self.client.get(f"{self.api_url}/user", headers=headers)
         except httpx2.HTTPError:
-            return Access(Verdict.UNAVAILABLE)
+            return self._record(key, Access(Verdict.UNAVAILABLE))
         user_verdict = _response_verdict(user_response)
         if user_verdict is not Verdict.ALLOWED:
             access = Access(user_verdict)
         else:
-            candidate = user_response.json().get("login")
+            try:
+                user_payload = user_response.json()
+            except ValueError:
+                return self._record(key, Access(Verdict.UNAVAILABLE))
+            if not isinstance(user_payload, dict):
+                return self._record(key, Access(Verdict.UNAVAILABLE))
+            candidate = user_payload.get("login")
             if not isinstance(candidate, str):
                 access = Access(Verdict.DENIED)
             else:
                 try:
                     repo_response = await self.client.get(f"{self.api_url}/repos/{repo}", headers=headers)
                 except httpx2.HTTPError:
-                    return Access(Verdict.UNAVAILABLE)
+                    return self._record(key, Access(Verdict.UNAVAILABLE))
                 repo_verdict = _response_verdict(repo_response)
                 access = Access(repo_verdict, candidate if repo_verdict is Verdict.ALLOWED else None)
 
-        if access.verdict is not Verdict.UNAVAILABLE:
-            self._cache[key] = (monotonic() + self.cache_ttl, access)
-        return access
+        return self._record(key, access)
