@@ -131,6 +131,53 @@ wait_for_subscription() {
     fail "${label}" "listener did not subscribe within 30 seconds"
 }
 
+forwarded_hook_id() {
+    local candidate
+    local known
+
+    while IFS= read -r candidate; do
+        [[ -n "${candidate}" ]] || continue
+        for known in ${PREEXISTING_HOOKS[@]+"${PREEXISTING_HOOKS[@]}"}; do
+            if [[ "${candidate}" == "${known}" ]]; then
+                continue 2
+            fi
+        done
+        printf '%s\n' "${candidate}"
+        return 0
+    done < <(gh api "repos/${REPO}/hooks" --jq '.[].id' 2>/dev/null || true)
+    return 0
+}
+
+wait_for_delivery_path() {
+    local attempt
+    local deadline
+    local hook_id
+
+    hook_id=$(forwarded_hook_id)
+    if [[ -z "${hook_id}" ]]; then
+        fail Setup "could not identify the hook created by gh webhook forward"
+    fi
+
+    # GitHub can report the hook as created before `gh webhook forward` has
+    # finished wiring its relay, and deliveries in that window are dropped
+    # silently. Waiting only for the hook to exist made scenarios start on an
+    # unproven path and fail roughly one run in seven. Ping the hook until a
+    # delivery actually reaches the local server, which exercises the same
+    # GitHub -> forwarder -> server path the scenarios depend on.
+    for ((attempt = 1; attempt <= 12; attempt++)); do
+        gh api -X POST "repos/${REPO}/hooks/${hook_id}/pings" >/dev/null 2>&1
+        deadline=$((SECONDS + 5))
+        while ((SECONDS < deadline)); do
+            if grep -q 'POST /webhook' "${SERVER_LOG}"; then
+                printf 'Delivery path confirmed live after %s ping(s)\n' "${attempt}"
+                return 0
+            fi
+            sleep 0.5
+        done
+    done
+    fail Setup "no webhook delivery reached the server within 60 seconds"
+}
+
 trap 'cleanup "$?"' EXIT
 
 if ! command -v gh >/dev/null 2>&1; then
@@ -246,6 +293,8 @@ done
 if ((HOOK_READY == 0)); then
     fail Setup "GitHub did not report an active repository hook within 30 seconds"
 fi
+
+wait_for_delivery_path
 
 A_STDOUT="${TMP_DIR}/scenario-a.stdout"
 A_STDERR="${TMP_DIR}/scenario-a.stderr"
