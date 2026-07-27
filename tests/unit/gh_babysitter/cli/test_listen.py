@@ -113,6 +113,30 @@ async def test_listen_prints_pretty_events_and_handles_ready(capsys, fake_token,
     assert client.params == {"repo": "octo/repo", "events": "issues"}
 
 
+async def test_listen_with_number_and_action_sends_query_parameters(fake_token, envelope):
+    event = envelope(action="closed")
+    client = _Client(_Response(f"data: {json.dumps(event)}", ""))
+
+    result = await listen.listen(
+        listen.ListenOptions(
+            repo="octo/repo",
+            events="issues",
+            number=42,
+            action="closed",
+            count=1,
+        ),
+        lambda **kwargs: cast("httpx2.AsyncClient", client),
+    )
+
+    assert result == 0
+    assert client.params == {
+        "repo": "octo/repo",
+        "events": "issues",
+        "number": 42,
+        "action": "closed",
+    }
+
+
 async def test_listen_refuses_plain_http_to_non_loopback_before_resolving_token(monkeypatch):
     monkeypatch.setattr(listen, "resolve_token", lambda: pytest.fail("token resolved"))
 

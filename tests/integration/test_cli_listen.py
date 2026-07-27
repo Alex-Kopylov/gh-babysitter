@@ -57,6 +57,73 @@ async def test_listen_exits_after_requested_event_count(
     assert json.loads(capsys.readouterr().out)["number"] == 42
 
 
+async def test_combined_filters_emit_only_exact_match(
+    capsys,
+    fake_authenticator,
+    make_app,
+    client_factory,
+    wait_until_registered,
+    deliver,
+    fake_token,
+):
+    registry = Registry()
+    app = make_app(
+        registry=registry,
+        authenticator=fake_authenticator,
+        recheck_interval=0.01,
+    )
+    task = asyncio.create_task(
+        listen.listen(
+            listen.ListenOptions(
+                repo="octo/repo",
+                events="issues",
+                number=42,
+                action="closed",
+                count=1,
+                timeout=1,
+                server="http://server",
+            ),
+            client_factory(app),
+        )
+    )
+    await wait_until_registered(registry)
+
+    opened = await deliver(
+        app,
+        "issues",
+        {
+            "repository": {"full_name": "octo/repo"},
+            "action": "opened",
+            "issue": {"number": 42},
+        },
+    )
+    wrong_number = await deliver(
+        app,
+        "issues",
+        {
+            "repository": {"full_name": "octo/repo"},
+            "action": "closed",
+            "issue": {"number": 41},
+        },
+    )
+    exact = await deliver(
+        app,
+        "issues",
+        {
+            "repository": {"full_name": "octo/repo"},
+            "action": "closed",
+            "issue": {"number": 42},
+        },
+    )
+    fake_authenticator.revoked = True
+
+    assert opened.json()["matched"] == 0
+    assert wrong_number.json()["matched"] == 0
+    assert exact.json()["matched"] == 1
+    assert await task == 0
+    assert json.loads(capsys.readouterr().out)["payload"]["issue"]["number"] == 42
+
+
 async def test_listen_until_exits_on_terminal_stream_event(
     capsys,
     fake_authenticator,
