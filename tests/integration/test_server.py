@@ -12,7 +12,7 @@ import anyio.lowlevel
 import httpx2
 
 from gh_babysitter.server.app import create_app
-from gh_babysitter.server.auth import Authenticator
+from gh_babysitter.server.auth import Access, Authenticator, Verdict
 from gh_babysitter.server.config import Settings
 from gh_babysitter.server.registry import Filter, Registry
 
@@ -22,12 +22,12 @@ class _FakeAuthenticator:
         self.revoked = False
         self.calls: list[tuple[str, str, bool]] = []
 
-    async def verify(self, token: str, repo: str, *, fresh: bool = False) -> str | None:
+    async def verify(self, token: str, repo: str, *, fresh: bool = False) -> Access:
         await anyio.lowlevel.checkpoint()
         self.calls.append((token, repo, fresh))
         if token != "token" or repo != "octo/repo" or self.revoked:
-            return None
-        return "octocat"
+            return Access(Verdict.DENIED)
+        return Access(Verdict.ALLOWED, "octocat")
 
 
 def make_client(
@@ -123,11 +123,12 @@ async def test_stream_requires_bearer_token():
 
 async def test_stream_rejects_unknown_repository():
     async with make_client(authenticator=_FakeAuthenticator()) as client:
-        response = await client.get(
-            "/events/stream",
-            params={"repo": "other/repo", "events": "issues"},
-            headers={"Authorization": "Bearer token"},
-        )
+        with anyio.fail_after(1):
+            response = await client.get(
+                "/events/stream",
+                params={"repo": "other/repo", "events": "issues"},
+                headers={"Authorization": "Bearer token"},
+            )
 
     assert response.status_code == 403
 

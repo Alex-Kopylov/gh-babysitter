@@ -11,7 +11,7 @@ import pytest
 
 from gh_babysitter.cli import listen
 from gh_babysitter.server.app import create_app
-from gh_babysitter.server.auth import Authenticator
+from gh_babysitter.server.auth import Access, Authenticator, Verdict
 from gh_babysitter.server.config import Settings
 from gh_babysitter.server.registry import Registry
 
@@ -20,11 +20,11 @@ class _FakeAuthenticator:
     def __init__(self) -> None:
         self.revoked = False
 
-    async def verify(self, token: str, repo: str, *, fresh: bool = False) -> str | None:
+    async def verify(self, token: str, repo: str, *, fresh: bool = False) -> Access:
         await anyio.lowlevel.checkpoint()
         if token == "token" and repo == "octo/repo" and not self.revoked:
-            return "octocat"
-        return None
+            return Access(Verdict.ALLOWED, "octocat")
+        return Access(Verdict.DENIED)
 
 
 def make_app(registry: Registry, authenticator: Authenticator):
