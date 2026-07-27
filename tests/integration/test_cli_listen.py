@@ -145,6 +145,54 @@ async def test_listen_until_polls_before_connecting(
     assert capsys.readouterr().out == ""
 
 
+async def test_stream_disconnect_with_satisfied_until_poll_exits_before_reconnect(
+    monkeypatch,
+    capsys,
+    fake_authenticator,
+    make_app,
+    client_factory,
+    wait_until_registered,
+    fake_token,
+):
+    registry = Registry()
+    app = make_app(
+        registry=registry,
+        authenticator=fake_authenticator,
+        recheck_interval=0.01,
+    )
+    github_requests = []
+
+    def github_handler(request):
+        github_requests.append(request)
+        return httpx2.Response(200, json={"merged": len(github_requests) == 2})
+
+    monkeypatch.setattr(listen.random, "uniform", lambda _low, _high: 0)
+    task = asyncio.create_task(
+        listen.listen(
+            listen.ListenOptions(
+                repo="octo/repo",
+                number=42,
+                until="merged",
+                timeout=1,
+                server="http://server",
+            ),
+            client_factory(app, github_handler),
+        )
+    )
+    await wait_until_registered(registry)
+    fake_authenticator.revoked = True
+
+    result = await task
+
+    assert result == 0
+    assert [request.url.path for request in github_requests] == [
+        "/repos/octo/repo/pulls/42",
+        "/repos/octo/repo/pulls/42",
+    ]
+    assert "warning: disconnected" not in capsys.readouterr().err
+    assert registry.connections == {}
+
+
 async def test_listen_timeout_returns_124(
     fake_authenticator,
     make_app,
