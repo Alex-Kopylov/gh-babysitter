@@ -14,7 +14,7 @@ from fastapi import FastAPI, HTTPException, Query, Request, Response
 from fastapi.responses import JSONResponse
 from sse_starlette.sse import EventSourceResponse
 
-from gh_babysitter.server.auth import Authenticator, GitHubAuthenticator, Verdict
+from gh_babysitter.server.auth import Access, Authenticator, GitHubAuthenticator, Verdict
 from gh_babysitter.server.events import EVENT_MENU
 from gh_babysitter.server.normalize import normalize
 from gh_babysitter.server.registry import Filter, Registry
@@ -24,6 +24,15 @@ if TYPE_CHECKING:
     from collections.abc import AsyncIterator
 
     from gh_babysitter.server.config import Settings
+
+_UNAVAILABLE_RECHECK_MAX = 30
+
+
+def _recheck_delay(access: Access, interval: float) -> float:
+    """Return the next authorization recheck delay."""
+    if access.verdict is Verdict.UNAVAILABLE:
+        return min(interval, _UNAVAILABLE_RECHECK_MAX)
+    return interval
 
 
 def _bearer_token(authorization: str | None) -> str:
@@ -109,6 +118,12 @@ async def _stream(
     if authenticator is None:
         raise RuntimeError
     access = await authenticator.verify(token, repo)
+    if access.verdict is Verdict.UNAVAILABLE:
+        raise HTTPException(
+            status_code=503,
+            detail="GitHub API unavailable",
+            headers={"Retry-After": "5"},
+        )
     if access.verdict is not Verdict.ALLOWED or access.login is None:
         raise HTTPException(status_code=403, detail="Repository access denied")
 
@@ -135,9 +150,12 @@ async def _stream(
                     envelope = await asyncio.wait_for(queue.get(), timeout=timeout)
                 except TimeoutError:
                     access = await authenticator.verify(token, repo, fresh=True)
-                    if access.verdict is not Verdict.ALLOWED:
+                    if access.verdict is Verdict.DENIED:
                         return
-                    next_recheck = asyncio.get_running_loop().time() + settings.recheck_interval
+                    next_recheck = asyncio.get_running_loop().time() + _recheck_delay(
+                        access,
+                        settings.recheck_interval,
+                    )
                 else:
                     yield {"data": json.dumps(envelope, separators=(",", ":"))}
         finally:

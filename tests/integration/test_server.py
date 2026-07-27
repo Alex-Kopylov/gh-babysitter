@@ -10,8 +10,11 @@ from unittest.mock import patch
 import anyio
 import anyio.lowlevel
 import httpx2
+import pytest
+from starlette.requests import Request
 
-from gh_babysitter.server.app import create_app
+from gh_babysitter.server import app as app_module
+from gh_babysitter.server.app import _stream, create_app
 from gh_babysitter.server.auth import Access, Authenticator, Verdict
 from gh_babysitter.server.config import Settings
 from gh_babysitter.server.registry import Filter, Registry
@@ -20,6 +23,8 @@ from gh_babysitter.server.registry import Filter, Registry
 class _FakeAuthenticator:
     def __init__(self) -> None:
         self.revoked = False
+        self.access = Access(Verdict.ALLOWED, "octocat")
+        self.rechecks: list[Access] = []
         self.calls: list[tuple[str, str, bool]] = []
 
     async def verify(self, token: str, repo: str, *, fresh: bool = False) -> Access:
@@ -27,7 +32,9 @@ class _FakeAuthenticator:
         self.calls.append((token, repo, fresh))
         if token != "token" or repo != "octo/repo" or self.revoked:
             return Access(Verdict.DENIED)
-        return Access(Verdict.ALLOWED, "octocat")
+        if fresh and self.rechecks:
+            return self.rechecks.pop(0)
+        return self.access
 
 
 def make_client(
@@ -131,6 +138,64 @@ async def test_stream_rejects_unknown_repository():
             )
 
     assert response.status_code == 403
+    assert response.json() == {"detail": "Repository access denied"}
+
+
+async def test_stream_reports_unavailable_github():
+    authenticator = _FakeAuthenticator()
+    authenticator.access = Access(Verdict.UNAVAILABLE)
+    async with make_client(authenticator=authenticator) as client:
+        response = await client.get(
+            "/events/stream",
+            params={"repo": "octo/repo", "events": "issues"},
+            headers={"Authorization": "Bearer token"},
+        )
+
+    assert response.status_code == 503
+    assert response.headers["retry-after"] == "5"
+    assert response.json() == {"detail": "GitHub API unavailable"}
+
+
+async def test_unavailable_recheck_stays_open_and_retries_within_thirty_seconds(monkeypatch):
+    registry = Registry()
+    authenticator = _FakeAuthenticator()
+    authenticator.rechecks = [
+        Access(Verdict.UNAVAILABLE),
+        Access(Verdict.DENIED),
+    ]
+    app = create_app(
+        Settings(webhook_secret="secret", recheck_interval=60, ping_interval=60),
+        registry=registry,
+        authenticator=authenticator,
+    )
+    request = Request(
+        {
+            "type": "http",
+            "method": "GET",
+            "path": "/events/stream",
+            "headers": [(b"authorization", b"Bearer token")],
+            "query_string": b"",
+            "app": app,
+        }
+    )
+    timeouts = []
+
+    async def expire_immediately(awaitable, **options):
+        await anyio.lowlevel.checkpoint()
+        awaitable.close()
+        timeouts.append(options["timeout"])
+        raise TimeoutError
+
+    monkeypatch.setattr(app_module.asyncio, "wait_for", expire_immediately)
+
+    response = await _stream(request, repo="octo/repo", events="release")
+    await anext(response.body_iterator)
+    with pytest.raises(StopAsyncIteration):
+        await anext(response.body_iterator)
+
+    assert timeouts == pytest.approx([60, 30], abs=0.01)
+    assert [call[2] for call in authenticator.calls] == [False, True, True]
+    assert registry.connections == {}
 
 
 async def test_stream_rejects_bad_events_and_repository_names():
