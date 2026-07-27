@@ -67,7 +67,7 @@ description = "Run fast Python checks"
 run = [
   "uv run ruff check src tests",
   "uv run ruff format --check src tests",
-  "uv run flake8 src tests",
+  { task = "flake8" },
 ]
 
 [tasks.lint-python-deep]
