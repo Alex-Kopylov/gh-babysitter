@@ -334,6 +334,43 @@ async def test_recheck_closes_stream_after_access_revocation(
     assert registry.connections == {}
 
 
+async def test_configured_ping_interval_emits_comment(
+    make_client,
+    fake_authenticator,
+    wait_until_registered,
+):
+    registry = Registry()
+    response: httpx2.Response | None = None
+
+    async def consume(client):
+        nonlocal response
+        response = await client.get(
+            "/events/stream",
+            params={"repo": "octo/repo", "events": "issues"},
+            headers={"Authorization": "Bearer token"},
+        )
+
+    async with (
+        make_client(
+            registry=registry,
+            authenticator=fake_authenticator,
+            ping_interval=1,
+            recheck_interval=1.2,
+        ) as client,
+        anyio.create_task_group() as tasks,
+    ):
+        tasks.start_soon(consume, client)
+        await wait_until_registered(registry)
+        await anyio.sleep(1.05)
+        fake_authenticator.revoked = True
+
+    assert response is not None
+    assert response.status_code == 200
+    assert "event: ready" in response.text
+    assert any(line.startswith(": ping - ") for line in response.text.splitlines())
+    assert registry.connections == {}
+
+
 async def test_stalled_listener_receives_exact_delivery_loss_count(
     fake_authenticator,
     webhook_headers,
