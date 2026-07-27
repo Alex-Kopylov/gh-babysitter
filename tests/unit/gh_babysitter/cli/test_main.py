@@ -11,6 +11,7 @@ from typer.testing import CliRunner
 import gh_babysitter
 from gh_babysitter.cli import listen as listen_core
 from gh_babysitter.cli import main
+from tests.conftest import cli_text
 
 runner = CliRunner()
 ROOT = Path(__file__).parents[4]
@@ -135,7 +136,7 @@ def test_listen_command_reports_invalid_duration_as_usage_error():
     )
 
     assert result.exit_code == 2
-    assert "invalid duration" in result.output
+    assert "invalid duration" in cli_text(result.output)
 
 
 @pytest.mark.parametrize(
@@ -176,7 +177,7 @@ def test_listen_command_rejects_invalid_options_before_creating_client(monkeypat
     result = runner.invoke(main.app, ["listen", *args])
 
     assert result.exit_code == 2
-    assert message in result.output
+    assert message in cli_text(result.output)
 
 
 @pytest.mark.parametrize("value", ["0", "0s"])
@@ -190,7 +191,7 @@ def test_listen_command_rejects_non_positive_timeout_before_running_core(monkeyp
     )
 
     assert result.exit_code == 2
-    assert "--timeout must be greater than zero" in result.output
+    assert "--timeout must be greater than zero" in cli_text(result.output)
     core.assert_not_awaited()
 
 
@@ -290,7 +291,7 @@ def test_setup_command_rejects_empty_secret_stdin(monkeypatch):
     )
 
     assert result.exit_code == 2
-    assert "stdin secret must not be empty" in result.output
+    assert "stdin secret must not be empty" in cli_text(result.output)
     setup_webhook.assert_not_awaited()
 
 
@@ -312,7 +313,7 @@ def test_setup_command_rejects_removed_secret_option(monkeypatch):
     )
 
     assert result.exit_code == 2
-    assert "No such option: --secret" in result.output
+    assert "No such option: --secret" in cli_text(result.output)
     setup_webhook.assert_not_awaited()
 
 

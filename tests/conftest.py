@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from collections.abc import Callable
 from typing import Any
 from unittest.mock import AsyncMock
@@ -9,6 +10,21 @@ from unittest.mock import AsyncMock
 import pytest
 
 from gh_babysitter.cli import listen
+
+_ANSI_ESCAPE = re.compile(r"\x1b\[[0-9;]*m")
+_BOX_DRAWING = re.compile(r"[─-╿]")
+
+
+def cli_text(output: str) -> str:
+    """Return CLI output with styling, box drawing, and line wrapping flattened.
+
+    Typer renders errors inside a Rich panel whose width follows the terminal, so
+    a message that fits one line locally wraps in CI and breaks naive substring
+    assertions. Collapsing whitespace makes those assertions width-independent
+    without weakening them.
+    """
+    plain = _ANSI_ESCAPE.sub("", output)
+    return " ".join(_BOX_DRAWING.sub(" ", plain).split())
 
 
 @pytest.fixture
