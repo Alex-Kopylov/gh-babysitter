@@ -49,8 +49,10 @@ This release resolves the black-box audit findings tracked in
   server shutdown.
 - Malformed JSON and non-object webhook bodies could escape request handling
   instead of returning a controlled `400` response.
-- Successful exit after an SSE event could abandon the stream generator and
-  emit `RuntimeError: generator didn't stop after athrow()`.
+- Successful exit after an SSE event printed a `RuntimeError: generator didn't
+  stop after athrow()` traceback to stderr, from an upstream httpcore2
+  async-generator finalization bug, which agents reading stderr could mistake
+  for a failure. The traceback is now filtered; the exit code was always `0`.
 - Malformed repositories, non-positive object numbers, empty actions, invalid
   server URLs, and non-positive timeouts were accepted locally instead of
   failing as usage errors before network activity.
