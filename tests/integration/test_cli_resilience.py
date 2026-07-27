@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 from functools import partial
-from unittest.mock import AsyncMock
 
 import anyio
 import httpx2
@@ -13,14 +12,12 @@ import pytest
 from gh_babysitter.cli import listen
 
 
-def _success_stream() -> httpx2.Response:
-    envelope = {
-        "repo": "octo/repo",
-        "event": "issues",
-        "action": "opened",
-        "number": 42,
-    }
-    content = f"event: ready\ndata: {{}}\n\ndata: {json.dumps(envelope)}\n\n"
+@pytest.fixture
+def success_stream(envelope, sse_body) -> httpx2.Response:
+    content = sse_body(
+        "event: ready\ndata: {}",
+        f"data: {json.dumps(envelope())}",
+    )
     return httpx2.Response(
         200,
         headers={"content-type": "text/event-stream"},
@@ -36,7 +33,7 @@ def _client_factory(handler):
 
 
 @pytest.mark.parametrize("status", [400, 404, 422])
-async def test_permanent_client_error_exits_once_with_server_detail(monkeypatch, capsys, status):
+async def test_permanent_client_error_exits_once_with_server_detail(capsys, status, fake_token):
     requests = []
     detail = f"permanent error {status}"
 
@@ -45,8 +42,6 @@ async def test_permanent_client_error_exits_once_with_server_detail(monkeypatch,
         if len(requests) > 1:
             raise AssertionError("permanent client error was retried")
         return httpx2.Response(status, json={"detail": detail})
-
-    monkeypatch.setattr(listen, "resolve_token", lambda: "token")
 
     with anyio.fail_after(1):
         result = await listen.listen(
@@ -64,14 +59,12 @@ async def test_permanent_client_error_exits_once_with_server_detail(monkeypatch,
 
 
 @pytest.mark.parametrize("status", [401, 403])
-async def test_auth_rejection_exits_once_with_existing_message(monkeypatch, capsys, status):
+async def test_auth_rejection_exits_once_with_existing_message(capsys, status, fake_token):
     requests = []
 
     def handler(request):
         requests.append(request)
         return httpx2.Response(status, json={"detail": "ignored"})
-
-    monkeypatch.setattr(listen, "resolve_token", lambda: "token")
 
     result = await listen.listen(
         listen.ListenOptions(
@@ -88,24 +81,20 @@ async def test_auth_rejection_exits_once_with_existing_message(monkeypatch, caps
 
 
 @pytest.mark.parametrize("status", [408, 425, 429, 500, 503, 507])
-async def test_retryable_status_reconnects(monkeypatch, status):
+async def test_retryable_status_reconnects(
+    status,
+    fake_token,
+    deterministic_backoff,
+    success_stream,
+):
     requests = []
-    sleeps = []
 
     def handler(request):
         requests.append(request)
         if len(requests) == 1:
             headers = {"retry-after": "5"} if status == 503 else None
             return httpx2.Response(status, headers=headers)
-        return _success_stream()
-
-    monkeypatch.setattr(listen, "resolve_token", lambda: "token")
-    monkeypatch.setattr(
-        listen.asyncio,
-        "sleep",
-        AsyncMock(side_effect=lambda delay: sleeps.append(delay) if delay else None),
-    )
-    monkeypatch.setattr(listen.random, "uniform", lambda low, high: 1.0)
+        return success_stream
 
     result = await listen.listen(
         listen.ListenOptions(
@@ -119,26 +108,21 @@ async def test_retryable_status_reconnects(monkeypatch, status):
 
     assert result == 0
     assert len(requests) == 2
-    assert sleeps == [1.0]
+    assert deterministic_backoff == [1.0]
 
 
-async def test_retryable_status_does_not_reset_backoff(monkeypatch):
+async def test_retryable_status_does_not_reset_backoff(
+    fake_token,
+    deterministic_backoff,
+    success_stream,
+):
     requests = []
-    sleeps = []
 
     def handler(request):
         requests.append(request)
         if len(requests) < 3:
             return httpx2.Response(503)
-        return _success_stream()
-
-    monkeypatch.setattr(listen, "resolve_token", lambda: "token")
-    monkeypatch.setattr(
-        listen.asyncio,
-        "sleep",
-        AsyncMock(side_effect=lambda delay: sleeps.append(delay) if delay else None),
-    )
-    monkeypatch.setattr(listen.random, "uniform", lambda low, high: 1.0)
+        return success_stream
 
     result = await listen.listen(
         listen.ListenOptions(
@@ -152,26 +136,21 @@ async def test_retryable_status_does_not_reset_backoff(monkeypatch):
 
     assert result == 0
     assert len(requests) == 3
-    assert sleeps == [1.0, 2.0]
+    assert deterministic_backoff == [1.0, 2.0]
 
 
-async def test_stream_without_ready_does_not_reset_backoff(monkeypatch):
+async def test_stream_without_ready_does_not_reset_backoff(
+    fake_token,
+    deterministic_backoff,
+    success_stream,
+):
     requests = []
-    sleeps = []
 
     def handler(request):
         requests.append(request)
         if len(requests) < 3:
             return httpx2.Response(200, content=b"")
-        return _success_stream()
-
-    monkeypatch.setattr(listen, "resolve_token", lambda: "token")
-    monkeypatch.setattr(
-        listen.asyncio,
-        "sleep",
-        AsyncMock(side_effect=lambda delay: sleeps.append(delay) if delay else None),
-    )
-    monkeypatch.setattr(listen.random, "uniform", lambda low, high: 1.0)
+        return success_stream
 
     result = await listen.listen(
         listen.ListenOptions(
@@ -185,21 +164,22 @@ async def test_stream_without_ready_does_not_reset_backoff(monkeypatch):
 
     assert result == 0
     assert len(requests) == 3
-    assert sleeps == [1.0, 2.0]
+    assert deterministic_backoff == [1.0, 2.0]
 
 
-async def test_each_retryable_status_prints_disconnect_warning(monkeypatch, capsys):
+async def test_each_retryable_status_prints_disconnect_warning(
+    capsys,
+    fake_token,
+    deterministic_backoff,
+    success_stream,
+):
     requests = []
 
     def handler(request):
         requests.append(request)
         if len(requests) < 3:
             return httpx2.Response(503)
-        return _success_stream()
-
-    monkeypatch.setattr(listen, "resolve_token", lambda: "token")
-    monkeypatch.setattr(listen.asyncio, "sleep", AsyncMock())
-    monkeypatch.setattr(listen.random, "uniform", lambda low, high: 1.0)
+        return success_stream
 
     result = await listen.listen(
         listen.ListenOptions(
@@ -219,18 +199,19 @@ async def test_each_retryable_status_prints_disconnect_warning(monkeypatch, caps
     assert "subscribed" in stderr
 
 
-async def test_transport_error_prints_disconnect_warning(monkeypatch, capsys):
+async def test_transport_error_prints_disconnect_warning(
+    capsys,
+    fake_token,
+    deterministic_backoff,
+    success_stream,
+):
     requests = []
 
     def handler(request):
         requests.append(request)
         if len(requests) == 1:
             raise httpx2.ConnectError("connection refused")
-        return _success_stream()
-
-    monkeypatch.setattr(listen, "resolve_token", lambda: "token")
-    monkeypatch.setattr(listen.asyncio, "sleep", AsyncMock())
-    monkeypatch.setattr(listen.random, "uniform", lambda low, high: 1.0)
+        return success_stream
 
     result = await listen.listen(
         listen.ListenOptions(
@@ -249,14 +230,18 @@ async def test_transport_error_prints_disconnect_warning(monkeypatch, capsys):
     )
 
 
-async def test_lag_event_warns_without_consuming_event_count(monkeypatch, capsys):
-    envelope = {
-        "repo": "octo/repo",
-        "event": "issues",
-        "action": "opened",
-        "number": 42,
-    }
-    content = f'event: ready\ndata: {{}}\n\nevent: lag\ndata: {{"dropped":4}}\n\ndata: {json.dumps(envelope)}\n\n'
+async def test_lag_event_warns_without_consuming_event_count(
+    capsys,
+    fake_token,
+    envelope,
+    sse_body,
+):
+    event = envelope()
+    content = sse_body(
+        "event: ready\ndata: {}",
+        'event: lag\ndata: {"dropped":4}',
+        f"data: {json.dumps(event)}",
+    )
 
     def handler(request):
         return httpx2.Response(
@@ -264,8 +249,6 @@ async def test_lag_event_warns_without_consuming_event_count(monkeypatch, capsys
             headers={"content-type": "text/event-stream"},
             content=content,
         )
-
-    monkeypatch.setattr(listen, "resolve_token", lambda: "token")
 
     result = await listen.listen(
         listen.ListenOptions(
@@ -279,5 +262,5 @@ async def test_lag_event_warns_without_consuming_event_count(monkeypatch, capsys
 
     output = capsys.readouterr()
     assert result == 0
-    assert output.out == f"{json.dumps(envelope, separators=(',', ':'))}\n"
+    assert output.out == f"{json.dumps(event, separators=(',', ':'))}\n"
     assert "warning: server dropped 4 events (consumer too slow)" in output.err
