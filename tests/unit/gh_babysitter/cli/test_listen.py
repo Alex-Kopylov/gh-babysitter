@@ -226,7 +226,7 @@ async def test_listen_allows_explicit_insecure_server(monkeypatch):
     assert result == 0
 
 
-async def test_listen_stream_client_disables_read_timeout(monkeypatch):
+async def test_listen_stream_client_uses_bounded_read_timeout(monkeypatch):
     envelope = {
         "ts": "2026-07-20T12:00:00Z",
         "repo": "octo/repo",
@@ -247,7 +247,7 @@ async def test_listen_stream_client_disables_read_timeout(monkeypatch):
 
     timeout = calls[0]["timeout"]
     assert result == 0
-    assert (timeout.connect, timeout.read, timeout.write, timeout.pool) == (10, None, 10, 10)
+    assert (timeout.connect, timeout.read, timeout.write, timeout.pool) == (10, 90, 10, 10)
 
 
 async def test_listen_github_client_keeps_finite_timeout(monkeypatch):
@@ -281,7 +281,12 @@ async def test_listen_clients_use_configured_timeouts(monkeypatch):
     monkeypatch.setattr(
         listen,
         "get_settings",
-        lambda: Settings(_env_file=None, server_timeout=2.5, github_timeout=30),
+        lambda: Settings(
+            _env_file=None,
+            server_timeout=2.5,
+            stream_timeout=75,
+            github_timeout=30,
+        ),
     )
 
     result = await listen.listen(
@@ -293,7 +298,7 @@ async def test_listen_clients_use_configured_timeouts(monkeypatch):
     assert result == 0
     assert (server_timeout.connect, server_timeout.read, server_timeout.write, server_timeout.pool) == (
         2.5,
-        None,
+        75,
         2.5,
         2.5,
     )

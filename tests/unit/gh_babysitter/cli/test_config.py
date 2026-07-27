@@ -15,6 +15,7 @@ def _clear_settings_environment(monkeypatch, tmp_path):
         "GH_BABYSITTER_INSECURE",
         "GH_BABYSITTER_SERVER",
         "GH_BABYSITTER_SERVER_TIMEOUT",
+        "GH_BABYSITTER_STREAM_TIMEOUT",
         "GITHUB_API_URL",
         "GITHUB_TOKEN",
         "GH_HOST",
@@ -35,6 +36,7 @@ def test_settings_use_defaults():
     assert settings.github_token is None
     assert settings.insecure is False
     assert settings.server_timeout == 10
+    assert settings.stream_timeout == 90
     assert settings.github_timeout == 10
 
 
@@ -46,11 +48,13 @@ def test_settings_allow_explicit_insecure_transport(monkeypatch):
 
 def test_settings_read_timeouts_from_environment(monkeypatch):
     monkeypatch.setenv("GH_BABYSITTER_SERVER_TIMEOUT", "2.5")
+    monkeypatch.setenv("GH_BABYSITTER_STREAM_TIMEOUT", "75")
     monkeypatch.setenv("GH_BABYSITTER_GITHUB_TIMEOUT", "30")
 
     settings = _config_module().Settings(_env_file=None)
 
     assert settings.server_timeout == 2.5
+    assert settings.stream_timeout == 75
     assert settings.github_timeout == 30
 
 

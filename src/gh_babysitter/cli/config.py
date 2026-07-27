@@ -56,6 +56,10 @@ class Settings(BaseSettings):
         default=10,
         validation_alias="GH_BABYSITTER_SERVER_TIMEOUT",
     )
+    stream_timeout: float = Field(
+        default=90,
+        validation_alias="GH_BABYSITTER_STREAM_TIMEOUT",
+    )
     github_timeout: float = Field(
         default=10,
         validation_alias="GH_BABYSITTER_GITHUB_TIMEOUT",

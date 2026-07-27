@@ -265,10 +265,10 @@ async def listen(
     if client_factory is httpx2.AsyncClient:
         _guard_token_transport(options.server, insecure=settings.insecure)
     token = resolve_token()
-    # An SSE stream stays open indefinitely, so only its read timeout is unbounded.
+    # The server emits keepalives, so a bounded read timeout detects half-dead streams.
     server_timeout = httpx2.Timeout(
         connect=settings.server_timeout,
-        read=None,
+        read=settings.stream_timeout,
         write=settings.server_timeout,
         pool=settings.server_timeout,
     )
