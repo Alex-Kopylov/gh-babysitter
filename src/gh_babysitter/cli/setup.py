@@ -23,7 +23,8 @@ async def setup_webhook(
     if any(not event or event not in EVENT_MENU for event in event_names):
         message = "--events contains an unsupported event"
         raise typer.BadParameter(message)
-    secret = secret or secrets.token_hex(32)
+    supplied_secret = secret is not None
+    secret = secret if supplied_secret else secrets.token_hex(32)
     body: dict[str, Any] = {
         "name": "web",
         "active": True,
@@ -54,4 +55,7 @@ async def setup_webhook(
         response = await (client.patch(path, json=body) if hook_id is not None else client.post(path, json=body))
         response.raise_for_status()
 
-    print(f"Set GH_BABYSITTER_WEBHOOK_SECRET={secret} on the server.")
+    if supplied_secret:
+        print("webhook configured; reusing the supplied GH_BABYSITTER_WEBHOOK_SECRET")
+    else:
+        print(f"Set GH_BABYSITTER_WEBHOOK_SECRET={secret} on the server.")

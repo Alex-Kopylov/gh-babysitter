@@ -190,8 +190,6 @@ def test_setup_and_serve_commands_delegate(monkeypatch):
             "https://hooks.example/webhook",
             "--events",
             "issues,release",
-            "--secret",
-            "secret",
             "--api-url",
             "https://github.acme.com/api/v3",
         ],
@@ -204,12 +202,98 @@ def test_setup_and_serve_commands_delegate(monkeypatch):
             "org": "acme",
             "url": "https://hooks.example/webhook",
             "events": "issues,release",
-            "secret": "secret",
+            "secret": None,
             "api_url": "https://github.acme.com/api/v3",
         }
     ]
     assert serve_result.exit_code == 0
     assert serve_calls == [("0.0.0.0", 9000)]
+
+
+def test_setup_command_prefers_stdin_secret_to_environment(monkeypatch):
+    setup_webhook = AsyncMock()
+    monkeypatch.setattr(main, "setup_webhook", setup_webhook)
+
+    result = runner.invoke(
+        main.app,
+        [
+            "setup",
+            "--org",
+            "acme",
+            "--url",
+            "https://hooks.example/webhook",
+            "--secret-stdin",
+        ],
+        input="stdin-secret\n",
+        env={"GH_BABYSITTER_WEBHOOK_SECRET": "environment-secret"},
+    )
+
+    assert result.exit_code == 0
+    assert setup_webhook.await_args.kwargs["secret"] == "stdin-secret"
+
+
+def test_setup_command_uses_environment_secret(monkeypatch):
+    setup_webhook = AsyncMock()
+    monkeypatch.setattr(main, "setup_webhook", setup_webhook)
+
+    result = runner.invoke(
+        main.app,
+        [
+            "setup",
+            "--org",
+            "acme",
+            "--url",
+            "https://hooks.example/webhook",
+        ],
+        env={"GH_BABYSITTER_WEBHOOK_SECRET": "environment-secret"},
+    )
+
+    assert result.exit_code == 0
+    assert setup_webhook.await_args.kwargs["secret"] == "environment-secret"
+
+
+def test_setup_command_rejects_empty_secret_stdin(monkeypatch):
+    setup_webhook = AsyncMock()
+    monkeypatch.setattr(main, "setup_webhook", setup_webhook)
+
+    result = runner.invoke(
+        main.app,
+        [
+            "setup",
+            "--org",
+            "acme",
+            "--url",
+            "https://hooks.example/webhook",
+            "--secret-stdin",
+        ],
+        input=" \n",
+    )
+
+    assert result.exit_code == 2
+    assert "stdin secret must not be empty" in result.output
+    setup_webhook.assert_not_awaited()
+
+
+def test_setup_command_rejects_removed_secret_option(monkeypatch):
+    setup_webhook = AsyncMock()
+    monkeypatch.setattr(main, "setup_webhook", setup_webhook)
+
+    result = runner.invoke(
+        main.app,
+        [
+            "setup",
+            "--org",
+            "acme",
+            "--url",
+            "https://hooks.example/webhook",
+            "--secret",
+            "exposed-secret",
+        ],
+    )
+
+    assert result.exit_code == 2
+    assert "No such option: --secret" in result.output
+    setup_webhook.assert_not_awaited()
 
 
 def test_package_and_extension_entrypoints_are_configured():

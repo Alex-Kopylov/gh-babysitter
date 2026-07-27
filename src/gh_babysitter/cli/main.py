@@ -1,6 +1,7 @@
 """Typer command wiring for gh-babysitter."""
 
 import asyncio
+import sys
 from typing import Annotated
 
 import typer
@@ -66,9 +67,19 @@ def setup_command(
         typer.Option("--api-url", default_factory=lambda: get_settings().api_url),
     ],
     events: Annotated[str | None, typer.Option("-E", "--events")] = None,
-    secret: Annotated[str | None, typer.Option("--secret")] = None,
+    secret_stdin: Annotated[bool, typer.Option("--secret-stdin")] = False,
 ) -> None:
     """Create or update an organization webhook."""
+    secret = None
+    if secret_stdin:
+        secret = sys.stdin.read().strip()
+        if not secret:
+            message = "stdin secret must not be empty"
+            raise typer.BadParameter(message, param_hint="--secret-stdin")
+    else:
+        configured_secret = get_settings().webhook_secret
+        if configured_secret is not None:
+            secret = configured_secret.get_secret_value()
     asyncio.run(
         setup_webhook(
             org=org,

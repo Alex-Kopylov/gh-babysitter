@@ -48,6 +48,10 @@ class Settings(BaseSettings):
         default=None,
         validation_alias=AliasChoices("GH_TOKEN", "GITHUB_TOKEN"),
     )
+    webhook_secret: SecretStr | None = Field(
+        default=None,
+        validation_alias="GH_BABYSITTER_WEBHOOK_SECRET",
+    )
     insecure: bool = Field(
         default=False,
         validation_alias="GH_BABYSITTER_INSECURE",

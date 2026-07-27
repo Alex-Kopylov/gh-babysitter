@@ -16,6 +16,7 @@ def _clear_settings_environment(monkeypatch, tmp_path):
         "GH_BABYSITTER_SERVER",
         "GH_BABYSITTER_SERVER_TIMEOUT",
         "GH_BABYSITTER_STREAM_TIMEOUT",
+        "GH_BABYSITTER_WEBHOOK_SECRET",
         "GITHUB_API_URL",
         "GITHUB_TOKEN",
         "GH_HOST",
@@ -34,6 +35,7 @@ def test_settings_use_defaults():
     assert settings.api_url == "https://api.github.com"
     assert settings.server == "http://localhost:8000"
     assert settings.github_token is None
+    assert settings.webhook_secret is None
     assert settings.insecure is False
     assert settings.server_timeout == 10
     assert settings.stream_timeout == 90
@@ -145,6 +147,12 @@ def test_settings_fall_back_to_github_token(monkeypatch):
     monkeypatch.setenv("GITHUB_TOKEN", "github-token")
 
     assert _config_module().Settings(_env_file=None).github_token == SecretStr("github-token")
+
+
+def test_settings_read_webhook_secret(monkeypatch):
+    monkeypatch.setenv("GH_BABYSITTER_WEBHOOK_SECRET", "webhook-secret")
+
+    assert _config_module().Settings(_env_file=None).webhook_secret == SecretStr("webhook-secret")
 
 
 def test_settings_read_shared_dotenv_file(monkeypatch, tmp_path):
