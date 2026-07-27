@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    import asyncio
     from typing import Any
 
     from gh_babysitter.server.normalize import Normalized
@@ -22,13 +22,35 @@ class Filter:
     number: int | None = None
 
 
+@dataclass
+class Subscriber:
+    """Bounded event queue with delivery-loss accounting."""
+
+    queue: asyncio.Queue[dict[str, Any]]
+    dropped: int = 0
+
+    def offer(self, envelope: dict[str, Any]) -> bool:
+        """Enqueue an event and report whether delivery succeeded."""
+        try:
+            self.queue.put_nowait(envelope)
+        except asyncio.QueueFull:
+            self.dropped += 1
+            return False
+        return True
+
+    def take_dropped(self) -> int:
+        """Return and reset the pending delivery-loss count."""
+        count, self.dropped = self.dropped, 0
+        return count
+
+
 @dataclass(frozen=True)
 class Connection:
     """An authenticated SSE connection and its event filters."""
 
     login: str
     filters: tuple[Filter, ...]
-    queue: asyncio.Queue[dict[str, Any]]
+    subscriber: Subscriber
 
 
 class Registry:
@@ -44,12 +66,12 @@ class Registry:
         self,
         login: str,
         filters: list[Filter],
-        queue: asyncio.Queue[dict[str, Any]],
+        subscriber: Subscriber,
     ) -> int:
         """Register one connection and return its identifier."""
         connection_id = self._next_id
         self._next_id += 1
-        connection = Connection(login, tuple(filters), queue)
+        connection = Connection(login, tuple(filters), subscriber)
         self.connections[connection_id] = connection
         for event_filter in connection.filters:
             self.index.setdefault((event_filter.repo, event_filter.event), set()).add(connection_id)
@@ -67,9 +89,9 @@ class Registry:
             if not connection_ids:
                 del self.index[key]
 
-    def match(self, norm: Normalized) -> list[asyncio.Queue[dict[str, Any]]]:
-        """Return one queue per connection matching a normalized event."""
-        queues = []
+    def match(self, norm: Normalized) -> list[Subscriber]:
+        """Return one subscriber per connection matching a normalized event."""
+        subscribers = []
         for connection_id in sorted(self.index.get((norm.repo, norm.event), ())):
             connection = self.connections[connection_id]
             if any(
@@ -78,5 +100,5 @@ class Registry:
                 for event_filter in connection.filters
                 if event_filter.repo == norm.repo and event_filter.event == norm.event
             ):
-                queues.append(connection.queue)
-        return queues
+                subscribers.append(connection.subscriber)
+        return subscribers

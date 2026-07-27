@@ -17,7 +17,7 @@ from gh_babysitter.server import app as app_module
 from gh_babysitter.server.app import _stream, create_app
 from gh_babysitter.server.auth import Access, Authenticator, Verdict
 from gh_babysitter.server.config import Settings
-from gh_babysitter.server.registry import Filter, Registry
+from gh_babysitter.server.registry import Filter, Registry, Subscriber
 
 
 class _FakeAuthenticator:
@@ -127,7 +127,8 @@ async def test_full_queue_drops_event_without_failing_webhook():
     registry = Registry()
     queue = asyncio.Queue(maxsize=1)
     queue.put_nowait({"existing": True})
-    registry.register("octocat", [Filter(repo="octo/repo", event="issues")], queue)
+    subscriber = Subscriber(queue)
+    registry.register("octocat", [Filter(repo="octo/repo", event="issues")], subscriber)
     payload = {"repository": {"full_name": "octo/repo"}, "issue": {"number": 1}}
     body = json.dumps(payload).encode()
 
@@ -135,7 +136,7 @@ async def test_full_queue_drops_event_without_failing_webhook():
         response = await client.post("/webhook", content=body, headers=webhook_headers(body))
 
     assert response.status_code == 202
-    assert response.json() == {"matched": 1}
+    assert response.json() == {"matched": 1, "delivered": 0, "dropped": 1}
     assert queue.get_nowait() == {"existing": True}
 
 
@@ -279,7 +280,11 @@ async def test_webhook_to_sse_respects_action_and_number_filters():
                 }
                 body = json.dumps(payload).encode()
                 delivery = await client.post("/webhook", content=body, headers=webhook_headers(body))
-                assert delivery.json() == {"matched": matched}
+                assert delivery.json() == {
+                    "matched": matched,
+                    "delivered": matched,
+                    "dropped": 0,
+                }
         authenticator.revoked = True
 
     assert response is not None
@@ -346,4 +351,57 @@ async def test_recheck_closes_stream_after_access_revocation():
         }
     ]
     assert ("token", "octo/repo", True) in authenticator.calls
+    assert registry.connections == {}
+
+
+async def test_stalled_listener_receives_exact_delivery_loss_count():
+    registry = Registry()
+    authenticator = _FakeAuthenticator()
+    app = create_app(
+        Settings(
+            webhook_secret="secret",
+            recheck_interval=60,
+            ping_interval=60,
+            queue_maxsize=3,
+        ),
+        registry=registry,
+        authenticator=authenticator,
+    )
+    request = Request(
+        {
+            "type": "http",
+            "method": "GET",
+            "path": "/events/stream",
+            "headers": [(b"authorization", b"Bearer token")],
+            "query_string": b"",
+            "app": app,
+        }
+    )
+    stream = await _stream(request, repo="octo/repo", events="issues")
+    ready = await anext(stream.body_iterator)
+
+    deliveries = []
+    async with httpx2.AsyncClient(
+        transport=httpx2.ASGITransport(app=app),
+        base_url="http://test",
+    ) as client:
+        for number in range(7):
+            payload = {
+                "repository": {"full_name": "octo/repo"},
+                "issue": {"number": number},
+            }
+            body = json.dumps(payload).encode()
+            delivery = await client.post("/webhook", content=body, headers=webhook_headers(body))
+            deliveries.append(delivery.json())
+
+    lag = await anext(stream.body_iterator)
+    event = await anext(stream.body_iterator)
+    await stream.body_iterator.aclose()
+
+    assert ready["event"] == "ready"
+    assert sum(delivery["matched"] for delivery in deliveries) == 7
+    assert sum(delivery["delivered"] for delivery in deliveries) == 3
+    assert sum(delivery["dropped"] for delivery in deliveries) == 4
+    assert lag == {"event": "lag", "data": '{"dropped":4}'}
+    assert "event" not in event
     assert registry.connections == {}

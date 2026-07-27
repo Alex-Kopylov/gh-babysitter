@@ -4,10 +4,10 @@ from __future__ import annotations
 
 import asyncio
 import json
-from contextlib import asynccontextmanager, suppress
+from contextlib import asynccontextmanager
 from dataclasses import asdict
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING, Annotated, Any
+from typing import TYPE_CHECKING, Annotated
 
 import httpx2
 from fastapi import FastAPI, HTTPException, Query, Request, Response
@@ -17,7 +17,7 @@ from sse_starlette.sse import EventSourceResponse
 from gh_babysitter.server.auth import Access, Authenticator, GitHubAuthenticator, Verdict
 from gh_babysitter.server.events import EVENT_MENU
 from gh_babysitter.server.normalize import normalize
-from gh_babysitter.server.registry import Filter, Registry
+from gh_babysitter.server.registry import Filter, Registry, Subscriber
 from gh_babysitter.server.signature import verify_signature
 
 if TYPE_CHECKING:
@@ -33,6 +33,19 @@ def _recheck_delay(access: Access, interval: float) -> float:
     if access.verdict is Verdict.UNAVAILABLE:
         return min(interval, _UNAVAILABLE_RECHECK_MAX)
     return interval
+
+
+def _authorized_login(access: Access) -> str:
+    """Return an allowed login or raise the matching HTTP error."""
+    if access.verdict is Verdict.UNAVAILABLE:
+        raise HTTPException(
+            status_code=503,
+            detail="GitHub API unavailable",
+            headers={"Retry-After": "5"},
+        )
+    if access.verdict is not Verdict.ALLOWED or access.login is None:
+        raise HTTPException(status_code=403, detail="Repository access denied")
+    return access.login
 
 
 def _bearer_token(authorization: str | None) -> str:
@@ -100,11 +113,16 @@ async def _webhook(request: Request) -> Response:
         "number": norm.number,
         "payload": payload,
     }
-    queues = request.app.state.registry.match(norm)
-    for queue in queues:
-        with suppress(asyncio.QueueFull):
-            queue.put_nowait(envelope)
-    return JSONResponse({"matched": len(queues)}, status_code=202)
+    subscribers = request.app.state.registry.match(norm)
+    delivered = sum(subscriber.offer(envelope) for subscriber in subscribers)
+    return JSONResponse(
+        {
+            "matched": len(subscribers),
+            "delivered": delivered,
+            "dropped": len(subscribers) - delivered,
+        },
+        status_code=202,
+    )
 
 
 async def _stream(
@@ -123,20 +141,13 @@ async def _stream(
     if authenticator is None:
         raise RuntimeError
     access = await authenticator.verify(token, repo)
-    if access.verdict is Verdict.UNAVAILABLE:
-        raise HTTPException(
-            status_code=503,
-            detail="GitHub API unavailable",
-            headers={"Retry-After": "5"},
-        )
-    if access.verdict is not Verdict.ALLOWED or access.login is None:
-        raise HTTPException(status_code=403, detail="Repository access denied")
+    login = _authorized_login(access)
 
     settings: Settings = request.app.state.settings
     registry: Registry = request.app.state.registry
     filters = [Filter(repo, event, action, number) for event in event_names]
-    queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue(maxsize=settings.queue_maxsize)
-    connection_id = registry.register(access.login, filters, queue)
+    subscriber = Subscriber(asyncio.Queue(maxsize=settings.queue_maxsize))
+    connection_id = registry.register(login, filters, subscriber)
 
     async def event_generator() -> AsyncIterator[dict[str, str]]:  # noqa: ASYNC900 - SSE requires streaming.
         await asyncio.sleep(0)
@@ -150,9 +161,16 @@ async def _stream(
                 ),
             }
             while True:
+                if dropped := subscriber.take_dropped():
+                    await asyncio.sleep(0)
+                    yield {
+                        "event": "lag",
+                        "data": json.dumps({"dropped": dropped}, separators=(",", ":")),
+                    }
+                    await asyncio.sleep(0)
                 timeout = max(0, next_recheck - asyncio.get_running_loop().time())
                 try:
-                    envelope = await asyncio.wait_for(queue.get(), timeout=timeout)
+                    envelope = await asyncio.wait_for(subscriber.queue.get(), timeout=timeout)
                 except TimeoutError:
                     access = await authenticator.verify(token, repo, fresh=True)
                     if access.verdict is Verdict.DENIED:
