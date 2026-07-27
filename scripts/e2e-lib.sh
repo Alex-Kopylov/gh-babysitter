@@ -4,6 +4,7 @@
 
 NEGATIVE_AUTH_ENABLED=0
 
+# ponytail: Replace the four-spelling parser and requested flag with one check for GH_BABYSITTER_E2E_REQUIRE_NEGATIVE=1.
 _e2e_truthy() {
     case "${1,,}" in
         1 | true | yes | on) return 0 ;;
@@ -111,6 +112,7 @@ validate_negative_auth_matrix() {
     printf 'PASS credential access matrix: primary and secondary tokens are repository-isolated\n'
 }
 
+# ponytail: Require a token argument and use one GH_TOKEN-prefixed listener command instead of duplicating the command.
 assert_denied_subscription() {
     local elapsed
     local file_label

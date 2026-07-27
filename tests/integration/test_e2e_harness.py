@@ -74,6 +74,7 @@ def write_fake_uv(directory: Path, *, status: int, stderr: str, stdout: str = ""
     script.chmod(0o755)
 
 
+# ponytail: Make write_fake_gh admin-capable and delete this second factory to avoid duplicating the access matrix.
 def write_fake_admin_gh(directory: Path) -> tuple[Path, Path]:
     argument_log = directory / "gh-arguments.log"
     stdin_log = directory / "gh-stdin.log"

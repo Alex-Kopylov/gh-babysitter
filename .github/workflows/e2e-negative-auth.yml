@@ -35,6 +35,7 @@ jobs:
         with:
           github_token: ${{ github.token }}
       - run: uv sync --all-extras --locked
+      # ponytail: Delete this step; configure_negative_auth already fails closed on missing fixture values.
       - name: Require the two-repository fixture
         env:
           PRIMARY_REPO: ${{ vars.E2E_PRIMARY_REPO }}
