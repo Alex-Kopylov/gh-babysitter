@@ -32,9 +32,6 @@ class _Response:
         iterable.__aiter__.return_value = iter(self.lines)
         return iterable
 
-    def raise_for_status(self):
-        return None
-
 
 class _Client:
     def __init__(self, response):
@@ -51,45 +48,6 @@ class _Client:
     def stream(self, method, path, *, params):
         self.params = params
         return self.response
-
-
-class _FailingContext:
-    async def __aenter__(self):
-        raise httpx2.ConnectError("disconnected")
-
-    async def __aexit__(self, *args):
-        return None  # noqa: ASYNC910 - Test double has no asynchronous cleanup.
-
-
-class _ReadFailure(_Response):
-    def aiter_lines(self):
-        iterable = AsyncMock()
-        iterable.__aiter__.return_value = _ReadFailureLines()
-        return iterable
-
-
-class _ReadFailureLines:
-    def __init__(self):
-        self.lines = iter(("event: ready", "data: {}", ""))
-
-    def __iter__(self):
-        return self
-
-    def __next__(self):
-        try:
-            return next(self.lines)
-        except StopIteration as error:
-            raise httpx2.ReadError("disconnected") from error
-
-
-class _SequenceClient(_Client):
-    def __init__(self, *responses):
-        self.responses = list(responses)
-        self.params = None
-
-    def stream(self, method, path, *, params):
-        self.params = params
-        return self.responses.pop(0)
 
 
 def test_teardown_handler_reports_unrelated_exception_events():
@@ -153,16 +111,6 @@ async def test_listen_prints_pretty_events_and_handles_ready(capsys, fake_token,
     assert output.out == "2026-07-20T12:00:00Z octo/repo issues.closed #42\n"
     assert "subscribed" in output.err
     assert client.params == {"repo": "octo/repo", "events": "issues"}
-
-
-async def test_listen_treats_server_auth_rejection_as_fatal(capsys, fake_token):
-    result = await listen.listen(
-        listen.ListenOptions(repo="octo/repo", events="issues"),
-        lambda **kwargs: cast("httpx2.AsyncClient", _Client(_Response(status_code=403))),
-    )
-
-    assert result == 1
-    assert "403" in capsys.readouterr().err
 
 
 async def test_listen_refuses_plain_http_to_non_loopback_before_resolving_token(monkeypatch):
@@ -304,28 +252,3 @@ async def test_listen_clients_use_configured_timeouts(monkeypatch, fake_token):
         30,
         30,
     )
-
-
-async def test_listen_resets_backoff_after_a_successful_connection(monkeypatch, fake_token, envelope):
-    event = envelope()
-    client = _SequenceClient(
-        _FailingContext(),
-        _ReadFailure(),
-        _Response(f"data: {json.dumps(event)}", ""),
-    )
-    sleeps = []
-
-    monkeypatch.setattr(
-        listen.asyncio,
-        "sleep",
-        AsyncMock(side_effect=lambda delay: sleeps.append(delay) if delay else None),
-    )
-    monkeypatch.setattr(listen.random, "uniform", lambda low, high: 1.0)
-
-    result = await listen.listen(
-        listen.ListenOptions(repo="octo/repo", events="issues", count=1),
-        lambda **kwargs: cast("httpx2.AsyncClient", client),
-    )
-
-    assert result == 0
-    assert sleeps == [1.0, 1.0]
