@@ -1,7 +1,9 @@
 """Tests for the listen core."""
 
+import asyncio
 import json
-from typing import cast
+from types import SimpleNamespace
+from typing import Any, cast
 from unittest.mock import AsyncMock
 
 import anyio.lowlevel
@@ -88,6 +90,33 @@ class _SequenceClient(_Client):
     def stream(self, method, path, *, params):
         self.params = params
         return self.responses.pop(0)
+
+
+def test_teardown_handler_reports_unrelated_exception_events():
+    loop = asyncio.new_event_loop()
+    reported: list[dict[str, Any]] = []
+
+    def previous_handler(_loop: asyncio.AbstractEventLoop, context: dict[str, Any]) -> None:
+        reported.append(context)
+
+    unrelated_runtime_error = {
+        "exception": RuntimeError("unrelated failure"),
+        "asyncgen": SimpleNamespace(ag_code=SimpleNamespace(co_filename="/site-packages/httpcore2/_async/http11.py")),
+    }
+    unrelated_asyncgen_failure = {
+        "exception": RuntimeError("generator didn't stop after athrow()"),
+        "asyncgen": SimpleNamespace(ag_code=SimpleNamespace(co_filename=__file__)),
+    }
+
+    loop.set_exception_handler(previous_handler)
+    try:
+        listen._install_httpcore2_shutdown_workaround(loop)  # ruff:ignore[private-member-access]
+        loop.call_exception_handler(unrelated_runtime_error)
+        loop.call_exception_handler(unrelated_asyncgen_failure)
+    finally:
+        loop.close()
+
+    assert reported == [unrelated_runtime_error, unrelated_asyncgen_failure]
 
 
 @pytest.mark.parametrize(

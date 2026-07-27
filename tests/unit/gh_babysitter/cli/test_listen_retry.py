@@ -1,4 +1,4 @@
-"""Integration-style tests for CLI HTTP resilience."""
+"""Unit tests for CLI HTTP retry and response handling."""
 
 from __future__ import annotations
 
