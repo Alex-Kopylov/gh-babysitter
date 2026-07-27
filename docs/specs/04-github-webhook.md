@@ -24,7 +24,7 @@ GitHub App-вариант той же идеи («сервер добавляе�
 
 ### Статический allowlist
 
-Черновик меню (открытый вопрос — см. [README](../../README.md#открытые-вопросы)):
+Меню v1.0:
 
 ```
 issues, pull_request, issue_comment, pull_request_review, release
@@ -40,7 +40,7 @@ issues, pull_request, issue_comment, pull_request_review, release
 gh babysitter setup --org my-org --url https://hooks.example.com/webhook
 ```
 
-Она его **собственным** `gh`-токеном создаёт/обновляет org-хук: `content_type: json`, allowlist событий, свежесгенерированный HMAC-секрет (печатается один раз — положить в env сервиса). Токен админа нигде не сохраняется — сервис остаётся бесправным ([auth](03-auth.md#принципы)).
+Она его **собственным** `gh`-токеном создаёт/обновляет org-хук: `content_type: json`, allowlist событий и HMAC-секрет. Источник секрета: `--secret-stdin`, затем `GH_BABYSITTER_WEBHOOK_SECRET`, затем генерация. Переданный секрет не выводится; сгенерированный печатается один раз — положить в env сервиса. Токен админа нигде не сохраняется — сервис остаётся бесправным ([auth](03-auth.md#принципы)).
 
 ## Разбор cli/gh-webhook
 
