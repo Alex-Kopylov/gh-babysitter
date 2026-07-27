@@ -2,6 +2,10 @@
 
 set -euo pipefail
 
+SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+# shellcheck source=scripts/e2e-lib.sh
+source "${SCRIPT_DIR}/e2e-lib.sh"
+
 TMP_DIR=$(mktemp -d)
 REPO=""
 REPO_IS_DISPOSABLE=0
@@ -202,6 +206,9 @@ if ! command -v python3 >/dev/null 2>&1; then
     fail Preflight "python3 is not installed"
 fi
 
+configure_negative_auth
+validate_negative_auth_matrix
+
 if [[ -n "${GH_BABYSITTER_E2E_REPO:-}" ]]; then
     # Caller supplied a repository: reuse it and never delete it.
     REPO="${GH_BABYSITTER_E2E_REPO}"
@@ -264,6 +271,16 @@ while ((SECONDS < SERVER_DEADLINE)); do
 done
 if ((SERVER_READY == 0)); then
     fail Setup "server did not return HTTP 401 within 30 seconds"
+fi
+
+if ((NEGATIVE_AUTH_ENABLED)); then
+    assert_denied_subscription \
+        "Scenario D1 secondary token denied on primary repo" \
+        "${REPO}" \
+        "${GH_BABYSITTER_E2E_SECONDARY_TOKEN}"
+    assert_denied_subscription \
+        "Scenario D2 primary token denied on secondary repo" \
+        "${GH_BABYSITTER_E2E_SECONDARY_REPO}"
 fi
 
 mapfile -t PREEXISTING_HOOKS < <(gh api "repos/${REPO}/hooks" --jq '.[].id' 2>/dev/null || true)
@@ -378,4 +395,5 @@ if ((C_ELAPSED > 15)); then
     fail "Scenario C" "boundary poll took ${C_ELAPSED}s (expected at most 15s)"
 fi
 printf 'PASS Scenario C: initial poll returned in %ss without a webhook event\n' "${C_ELAPSED}"
+
 printf 'PASS all live E2E scenarios\n'

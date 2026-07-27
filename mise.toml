@@ -133,6 +133,18 @@ run = "uv run pytest tests/"
 description = "Run the pytest suite with a coverage report"
 run = "uv run pytest tests/ --cov --cov-report=term-missing"
 
+[tasks.e2e]
+description = "Run the live GitHub E2E suite using the current environment"
+run = "bash scripts/e2e.sh"
+
+[tasks.e2e-local]
+description = "Run the required live GitHub E2E suite using the ignored .env file"
+run = "uv run --env-file .env -- bash scripts/e2e.sh"
+
+[tasks.e2e-configure-secrets]
+description = "Validate .env credentials and store them as GitHub Actions secrets"
+run = "uv run --env-file .env -- bash scripts/configure-e2e-secrets.sh"
+
 [tasks.format]
 description = "Format and autofix Python code"
 run = [
