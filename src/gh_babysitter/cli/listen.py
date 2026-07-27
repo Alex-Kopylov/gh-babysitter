@@ -26,6 +26,10 @@ if TYPE_CHECKING:
     from collections.abc import Callable
 
 _REPO = re.compile(r"[A-Za-z0-9._-]+/[A-Za-z0-9._-]+")
+_RETRYABLE_STATUS = frozenset({408, 425, 429, 500, 502, 503, 504})
+_HTTP_CLIENT_ERROR = 400
+_HTTP_SERVER_ERROR = 500
+_HTTP_STATUS_LIMIT = 600
 
 
 @dataclass(frozen=True)
@@ -43,6 +47,18 @@ class ListenOptions:
     server: str = DEFAULT_SERVER
     api_url: str = DEFAULT_GITHUB_API_URL
     format: str = "json"
+
+
+@dataclass(frozen=True)
+class _Outcome:
+    exit_code: int | None = None
+    retry_reason: str | None = None
+
+
+@dataclass
+class _StreamState:
+    remaining: int | None
+    ready: bool = False
 
 
 def _validate_target(options: ListenOptions) -> None:
@@ -123,29 +139,64 @@ def _print_event(envelope: dict[str, Any], output_format: str) -> None:
 async def _consume_stream(
     response: httpx2.Response,
     options: ListenOptions,
-    remaining: int | None,
-) -> tuple[int | None, int | None]:
+    state: _StreamState,
+) -> _Outcome:
+    await asyncio.sleep(0)
     async for event_type, data in parse_sse(response.aiter_lines()):
         if event_type == "ready":
+            state.ready = True
             print("subscribed", file=sys.stderr)
             continue
         envelope = json.loads(data)
         _print_event(envelope, options.format)
         if options.until and satisfied_by_event(options.until, envelope):
-            return 0, remaining
-        if remaining is not None:
-            remaining -= 1
-            if remaining == 0:
-                return 0, remaining
-    return None, remaining
+            return _Outcome(exit_code=0)
+        if state.remaining is not None:
+            state.remaining -= 1
+            if state.remaining == 0:
+                return _Outcome(exit_code=0)
+    return _Outcome(retry_reason="stream ended")
 
 
-def _response_exit_code(response: httpx2.Response) -> int | None:
-    if response.status_code in {401, 403}:
-        print(f"server rejected the GitHub token ({response.status_code})", file=sys.stderr)
-        return 1
-    response.raise_for_status()
+async def _response_detail(response: httpx2.Response) -> str | None:
+    await response.aread()
+    try:
+        body = response.json()
+    except json.JSONDecodeError:
+        return None
+    if isinstance(body, dict) and isinstance(detail := body.get("detail"), str):
+        return detail
     return None
+
+
+async def _response_outcome(response: httpx2.Response) -> _Outcome:
+    await asyncio.sleep(0)
+    status = response.status_code
+    if status in {401, 403}:
+        print(f"server rejected the GitHub token ({status})", file=sys.stderr)
+        return _Outcome(exit_code=1)
+    if status in _RETRYABLE_STATUS or _HTTP_SERVER_ERROR <= status < _HTTP_STATUS_LIMIT:
+        return _Outcome(retry_reason=f"server returned {status}")
+    if _HTTP_CLIENT_ERROR <= status < _HTTP_SERVER_ERROR:
+        detail = await _response_detail(response)
+        print(f"error: {detail or f'server returned {status}'}", file=sys.stderr)
+        return _Outcome(exit_code=1)
+    return _Outcome()
+
+
+async def _stream_once(
+    server_client: httpx2.AsyncClient,
+    params: dict[str, str | int],
+    options: ListenOptions,
+    state: _StreamState,
+) -> _Outcome:
+    await asyncio.sleep(0)
+    state.ready = False
+    async with server_client.stream("GET", "/events/stream", params=params) as response:
+        outcome = await _response_outcome(response)
+        if outcome.exit_code is not None or outcome.retry_reason is not None:
+            return outcome
+        return await _consume_stream(response, options, state)
 
 
 async def _listen(
@@ -170,19 +221,17 @@ async def _listen(
     if options.action is not None:
         params["action"] = options.action
 
-    remaining = count
+    state = _StreamState(remaining=count)
     backoff = 1.0
     while True:
         try:
-            async with server_client.stream("GET", "/events/stream", params=params) as response:
-                if (exit_code := _response_exit_code(response)) is not None:
-                    return exit_code
-                backoff = 1.0
-                result, remaining = await _consume_stream(response, options, remaining)
-                if result is not None:
-                    return result
-        except httpx2.HTTPError:
-            pass
+            outcome = await _stream_once(server_client, params, options, state)
+        except httpx2.HTTPError as error:
+            outcome = _Outcome(retry_reason=str(error) or type(error).__name__)
+        if state.ready:
+            backoff = 1.0
+        if outcome.exit_code is not None:
+            return outcome.exit_code
 
         if (
             options.until is not None
