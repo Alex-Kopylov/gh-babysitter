@@ -1,0 +1,61 @@
+name: Negative authorization E2E
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/e2e-negative-auth.yml"
+      - "mise.toml"
+      - "scripts/configure-e2e-secrets.sh"
+      - "scripts/e2e-lib.sh"
+      - "scripts/e2e.sh"
+      - "src/gh_babysitter/server/app.py"
+      - "src/gh_babysitter/server/auth.py"
+      - "tests/integration/test_e2e_harness.py"
+  workflow_dispatch: {}
+
+concurrency:
+  group: negative-authorization-e2e
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  e2e:
+    if: >-
+      github.event_name != 'pull_request' ||
+      github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7.0.0
+        with:
+          persist-credentials: false
+      - uses: jdx/mise-action@v4.2.0
+        with:
+          github_token: ${{ github.token }}
+      - run: uv sync --all-extras --locked
+      # ponytail: Delete this step; configure_negative_auth already fails closed on missing fixture values.
+      - name: Require the two-repository fixture
+        env:
+          PRIMARY_REPO: ${{ vars.E2E_PRIMARY_REPO }}
+          PRIMARY_TOKEN: ${{ secrets.E2E_PRIMARY_TOKEN }}
+          SECONDARY_REPO: ${{ vars.E2E_SECONDARY_REPO }}
+          SECONDARY_TOKEN: ${{ secrets.E2E_SECONDARY_TOKEN }}
+        run: |
+          test -n "${PRIMARY_REPO}"
+          test -n "${PRIMARY_TOKEN}"
+          test -n "${SECONDARY_REPO}"
+          test -n "${SECONDARY_TOKEN}"
+      - name: Install the official webhook forwarder
+        env:
+          GH_TOKEN: ${{ secrets.E2E_PRIMARY_TOKEN }}
+        run: gh extension install cli/gh-webhook --pin v0.2.0
+      - name: Run the required negative authorization matrix
+        env:
+          GH_BABYSITTER_E2E_REPO: ${{ vars.E2E_PRIMARY_REPO }}
+          GH_BABYSITTER_E2E_REQUIRE_NEGATIVE: "1"
+          GH_BABYSITTER_E2E_SECONDARY_REPO: ${{ vars.E2E_SECONDARY_REPO }}
+          GH_BABYSITTER_E2E_SECONDARY_TOKEN: ${{ secrets.E2E_SECONDARY_TOKEN }}
+          GH_TOKEN: ${{ secrets.E2E_PRIMARY_TOKEN }}
+        run: mise run e2e
