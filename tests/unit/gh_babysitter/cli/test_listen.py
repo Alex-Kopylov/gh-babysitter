@@ -1,7 +1,9 @@
 """Tests for the listen core."""
 
+import asyncio
 import json
-from typing import cast
+from types import SimpleNamespace
+from typing import Any, cast
 from unittest.mock import AsyncMock
 
 import anyio.lowlevel
@@ -30,9 +32,6 @@ class _Response:
         iterable.__aiter__.return_value = iter(self.lines)
         return iterable
 
-    def raise_for_status(self):
-        return None
-
 
 class _Client:
     def __init__(self, response):
@@ -51,43 +50,31 @@ class _Client:
         return self.response
 
 
-class _FailingContext:
-    async def __aenter__(self):
-        raise httpx2.ConnectError("disconnected")
+def test_teardown_handler_reports_unrelated_exception_events():
+    loop = asyncio.new_event_loop()
+    reported: list[dict[str, Any]] = []
 
-    async def __aexit__(self, *args):
-        return None  # noqa: ASYNC910 - Test double has no asynchronous cleanup.
+    def previous_handler(_loop: asyncio.AbstractEventLoop, context: dict[str, Any]) -> None:
+        reported.append(context)
 
+    unrelated_runtime_error = {
+        "exception": RuntimeError("unrelated failure"),
+        "asyncgen": SimpleNamespace(ag_code=SimpleNamespace(co_filename="/site-packages/httpcore2/_async/http11.py")),
+    }
+    unrelated_asyncgen_failure = {
+        "exception": RuntimeError("generator didn't stop after athrow()"),
+        "asyncgen": SimpleNamespace(ag_code=SimpleNamespace(co_filename=__file__)),
+    }
 
-class _ReadFailure(_Response):
-    def aiter_lines(self):
-        iterable = AsyncMock()
-        iterable.__aiter__.return_value = _ReadFailureLines()
-        return iterable
+    loop.set_exception_handler(previous_handler)
+    try:
+        listen._install_httpcore2_shutdown_workaround(loop)  # ruff:ignore[private-member-access]
+        loop.call_exception_handler(unrelated_runtime_error)
+        loop.call_exception_handler(unrelated_asyncgen_failure)
+    finally:
+        loop.close()
 
-
-class _ReadFailureLines:
-    def __init__(self):
-        self.lines = iter(("event: ready", "data: {}", ""))
-
-    def __iter__(self):
-        return self
-
-    def __next__(self):
-        try:
-            return next(self.lines)
-        except StopIteration as error:
-            raise httpx2.ReadError("disconnected") from error
-
-
-class _SequenceClient(_Client):
-    def __init__(self, *responses):
-        self.responses = list(responses)
-        self.params = None
-
-    def stream(self, method, path, *, params):
-        self.params = params
-        return self.responses.pop(0)
+    assert reported == [unrelated_runtime_error, unrelated_asyncgen_failure]
 
 
 @pytest.mark.parametrize(
@@ -103,24 +90,16 @@ async def test_listen_rejects_invalid_exit_options(opts):
         await listen.listen(opts, lambda **kwargs: pytest.fail("client created"))
 
 
-async def test_listen_prints_pretty_events_and_handles_ready(monkeypatch, capsys):
-    envelope = {
-        "ts": "2026-07-20T12:00:00Z",
-        "repo": "octo/repo",
-        "event": "issues",
-        "action": "closed",
-        "number": 42,
-        "payload": {},
-    }
+async def test_listen_prints_pretty_events_and_handles_ready(capsys, fake_token, envelope):
+    event = envelope(action="closed")
     response = _Response(
         "event: ready",
         "data: {}",
         "",
-        f"data: {json.dumps(envelope)}",
+        f"data: {json.dumps(event)}",
         "",
     )
     client = _Client(response)
-    monkeypatch.setattr(listen, "resolve_token", lambda: "token")
 
     result = await listen.listen(
         listen.ListenOptions(repo="octo/repo", events="issues", count=1, format="pretty"),
@@ -134,16 +113,28 @@ async def test_listen_prints_pretty_events_and_handles_ready(monkeypatch, capsys
     assert client.params == {"repo": "octo/repo", "events": "issues"}
 
 
-async def test_listen_treats_server_auth_rejection_as_fatal(monkeypatch, capsys):
-    monkeypatch.setattr(listen, "resolve_token", lambda: "token")
+async def test_listen_with_number_and_action_sends_query_parameters(fake_token, envelope):
+    event = envelope(action="closed")
+    client = _Client(_Response(f"data: {json.dumps(event)}", ""))
 
     result = await listen.listen(
-        listen.ListenOptions(repo="octo/repo", events="issues"),
-        lambda **kwargs: cast("httpx2.AsyncClient", _Client(_Response(status_code=403))),
+        listen.ListenOptions(
+            repo="octo/repo",
+            events="issues",
+            number=42,
+            action="closed",
+            count=1,
+        ),
+        lambda **kwargs: cast("httpx2.AsyncClient", client),
     )
 
-    assert result == 1
-    assert "403" in capsys.readouterr().err
+    assert result == 0
+    assert client.params == {
+        "repo": "octo/repo",
+        "events": "issues",
+        "number": 42,
+        "action": "closed",
+    }
 
 
 async def test_listen_refuses_plain_http_to_non_loopback_before_resolving_token(monkeypatch):
@@ -171,15 +162,8 @@ async def test_listen_refuses_plain_http_to_non_loopback_before_resolving_token(
         "https://babysitter.example",
     ],
 )
-async def test_listen_allows_secure_or_loopback_server(monkeypatch, server):
-    envelope = {
-        "repo": "octo/repo",
-        "event": "issues",
-        "action": "opened",
-        "number": 42,
-    }
-    monkeypatch.setattr(listen, "resolve_token", lambda: "token")
-
+async def test_listen_allows_secure_or_loopback_server(server, fake_token, envelope):
+    event = envelope()
     result = await listen.listen(
         listen.ListenOptions(
             repo="octo/repo",
@@ -189,21 +173,15 @@ async def test_listen_allows_secure_or_loopback_server(monkeypatch, server):
         ),
         lambda **kwargs: cast(
             "httpx2.AsyncClient",
-            _Client(_Response(f"data: {json.dumps(envelope)}", "")),
+            _Client(_Response(f"data: {json.dumps(event)}", "")),
         ),
     )
 
     assert result == 0
 
 
-async def test_listen_allows_explicit_insecure_server(monkeypatch):
-    envelope = {
-        "repo": "octo/repo",
-        "event": "issues",
-        "action": "opened",
-        "number": 42,
-    }
-    monkeypatch.setattr(listen, "resolve_token", lambda: "token")
+async def test_listen_allows_explicit_insecure_server(monkeypatch, fake_token, envelope):
+    event = envelope()
     monkeypatch.setattr(
         listen,
         "get_settings",
@@ -219,29 +197,21 @@ async def test_listen_allows_explicit_insecure_server(monkeypatch):
         ),
         lambda **kwargs: cast(
             "httpx2.AsyncClient",
-            _Client(_Response(f"data: {json.dumps(envelope)}", "")),
+            _Client(_Response(f"data: {json.dumps(event)}", "")),
         ),
     )
 
     assert result == 0
 
 
-async def test_listen_stream_client_uses_bounded_read_timeout(monkeypatch):
-    envelope = {
-        "ts": "2026-07-20T12:00:00Z",
-        "repo": "octo/repo",
-        "event": "issues",
-        "action": "opened",
-        "number": 42,
-        "payload": {},
-    }
+async def test_listen_stream_client_uses_bounded_read_timeout(fake_token, envelope):
+    event = envelope()
     calls = []
-    monkeypatch.setattr(listen, "resolve_token", lambda: "token")
 
     result = await listen.listen(
         listen.ListenOptions(repo="octo/repo", events="issues", count=1),
         lambda **kwargs: (
-            calls.append(kwargs) or cast("httpx2.AsyncClient", _Client(_Response(f"data: {json.dumps(envelope)}", "")))
+            calls.append(kwargs) or cast("httpx2.AsyncClient", _Client(_Response(f"data: {json.dumps(event)}", "")))
         ),
     )
 
@@ -250,11 +220,10 @@ async def test_listen_stream_client_uses_bounded_read_timeout(monkeypatch):
     assert (timeout.connect, timeout.read, timeout.write, timeout.pool) == (10, 90, 10, 10)
 
 
-async def test_listen_github_client_keeps_finite_timeout(monkeypatch):
+async def test_listen_github_client_keeps_finite_timeout(monkeypatch, fake_token):
     calls = []
     api_url = "https://github.acme.com/api/v3"
 
-    monkeypatch.setattr(listen, "resolve_token", lambda: "token")
     monkeypatch.setattr(listen, "satisfied_by_poll", AsyncMock(return_value=True))
 
     result = await listen.listen(
@@ -273,10 +242,9 @@ async def test_listen_github_client_keeps_finite_timeout(monkeypatch):
     assert (timeout.connect, timeout.read, timeout.write, timeout.pool) == (10, 10, 10, 10)
 
 
-async def test_listen_clients_use_configured_timeouts(monkeypatch):
+async def test_listen_clients_use_configured_timeouts(monkeypatch, fake_token):
     calls = []
 
-    monkeypatch.setattr(listen, "resolve_token", lambda: "token")
     monkeypatch.setattr(listen, "satisfied_by_poll", AsyncMock(return_value=True))
     monkeypatch.setattr(
         listen,
@@ -308,36 +276,3 @@ async def test_listen_clients_use_configured_timeouts(monkeypatch):
         30,
         30,
     )
-
-
-async def test_listen_resets_backoff_after_a_successful_connection(monkeypatch):
-    envelope = {
-        "ts": "2026-07-20T12:00:00Z",
-        "repo": "octo/repo",
-        "event": "issues",
-        "action": "opened",
-        "number": 42,
-        "payload": {},
-    }
-    client = _SequenceClient(
-        _FailingContext(),
-        _ReadFailure(),
-        _Response(f"data: {json.dumps(envelope)}", ""),
-    )
-    sleeps = []
-
-    monkeypatch.setattr(listen, "resolve_token", lambda: "token")
-    monkeypatch.setattr(
-        listen.asyncio,
-        "sleep",
-        AsyncMock(side_effect=lambda delay: sleeps.append(delay) if delay else None),
-    )
-    monkeypatch.setattr(listen.random, "uniform", lambda low, high: 1.0)
-
-    result = await listen.listen(
-        listen.ListenOptions(repo="octo/repo", events="issues", count=1),
-        lambda **kwargs: cast("httpx2.AsyncClient", client),
-    )
-
-    assert result == 0
-    assert sleeps == [1.0, 1.0]

@@ -1,8 +1,6 @@
 """Integration tests for webhook-to-SSE server behavior."""
 
 import asyncio
-import hashlib
-import hmac
 import json
 from datetime import UTC, datetime
 from unittest.mock import patch
@@ -15,66 +13,17 @@ from starlette.requests import Request
 
 from gh_babysitter.server import app as app_module
 from gh_babysitter.server.app import _stream, create_app
-from gh_babysitter.server.auth import Access, Authenticator, Verdict
+from gh_babysitter.server.auth import Access, Verdict
 from gh_babysitter.server.config import Settings
 from gh_babysitter.server.registry import Filter, Registry, Subscriber
 
 
-class _FakeAuthenticator:
-    def __init__(self) -> None:
-        self.revoked = False
-        self.access = Access(Verdict.ALLOWED, "octocat")
-        self.rechecks: list[Access] = []
-        self.calls: list[tuple[str, str, bool]] = []
-
-    async def verify(self, token: str, repo: str, *, fresh: bool = False) -> Access:
-        await anyio.lowlevel.checkpoint()
-        self.calls.append((token, repo, fresh))
-        if token != "token" or repo != "octo/repo" or self.revoked:
-            return Access(Verdict.DENIED)
-        if fresh and self.rechecks:
-            return self.rechecks.pop(0)
-        return self.access
-
-
-def make_client(
-    *,
-    registry: Registry | None = None,
-    authenticator: Authenticator | None = None,
-    recheck_interval: float = 0.02,
-) -> httpx2.AsyncClient:
-    settings = Settings(
-        webhook_secret="secret",
-        recheck_interval=recheck_interval,
-        ping_interval=60,
-        queue_maxsize=1,
-    )
-    app = create_app(settings, registry=registry, authenticator=authenticator)
-    return httpx2.AsyncClient(transport=httpx2.ASGITransport(app=app), base_url="http://test")
-
-
-def webhook_headers(body, event="issues", *, valid=True):
-    digest = hmac.new(b"secret", body, hashlib.sha256).hexdigest()
-    return {
-        "Content-Type": "application/json",
-        "X-GitHub-Event": event,
-        "X-Hub-Signature-256": f"sha256={digest if valid else '0' * 64}",
-    }
-
-
-async def wait_until_registered(registry: Registry) -> None:
-    with anyio.fail_after(1):
-        await anyio.lowlevel.checkpoint()
-        while not registry.connections:  # noqa: ASYNC110 - Registry has no notification hook.
-            await anyio.lowlevel.checkpoint()
-
-
-def sse_data(response: httpx2.Response):
-    return [json.loads(line.removeprefix("data: ")) for line in response.text.splitlines() if line.startswith("data: ")]
-
-
-async def test_webhook_rejects_bad_hmac_before_parsing_json():
-    async with make_client(authenticator=_FakeAuthenticator()) as client:
+async def test_webhook_rejects_bad_hmac_before_parsing_json(
+    make_client,
+    fake_authenticator,
+    webhook_headers,
+):
+    async with make_client(authenticator=fake_authenticator) as client:
         response = await client.post("/webhook", content=b"not-json", headers=webhook_headers(b"not-json", valid=False))
 
     assert response.status_code == 401
@@ -91,9 +40,15 @@ async def test_webhook_rejects_bad_hmac_before_parsing_json():
         (b"42", "Payload must be a JSON object"),
     ],
 )
-async def test_webhook_rejects_invalid_json_and_remains_healthy(body, detail):
+async def test_webhook_rejects_invalid_json_and_remains_healthy(
+    body,
+    detail,
+    make_client,
+    fake_authenticator,
+    webhook_headers,
+):
     ping_body = b"{}"
-    async with make_client(authenticator=_FakeAuthenticator()) as client:
+    async with make_client(authenticator=fake_authenticator) as client:
         response = await client.post("/webhook", content=body, headers=webhook_headers(body))
         ping = await client.post(
             "/webhook",
@@ -106,24 +61,32 @@ async def test_webhook_rejects_invalid_json_and_remains_healthy(body, detail):
     assert ping.status_code == 200
 
 
-async def test_webhook_rejects_requests_when_secret_is_unset():
-    app = create_app(Settings(webhook_secret=None), authenticator=_FakeAuthenticator())
+async def test_webhook_rejects_requests_when_secret_is_unset(fake_authenticator):
+    app = create_app(Settings(webhook_secret=None), authenticator=fake_authenticator)
     async with httpx2.AsyncClient(transport=httpx2.ASGITransport(app=app), base_url="http://test") as client:
         response = await client.post("/webhook", content=b"{}")
 
     assert response.status_code == 401
 
 
-async def test_webhook_ping_returns_ok():
+async def test_webhook_ping_returns_ok(
+    make_client,
+    fake_authenticator,
+    webhook_headers,
+):
     body = b"{}"
-    async with make_client(authenticator=_FakeAuthenticator()) as client:
+    async with make_client(authenticator=fake_authenticator) as client:
         response = await client.post("/webhook", content=body, headers=webhook_headers(body, event="ping"))
 
     assert response.status_code == 200
     assert response.json() == {"ok": True}
 
 
-async def test_full_queue_drops_event_without_failing_webhook():
+async def test_full_queue_drops_event_without_failing_webhook(
+    make_client,
+    fake_authenticator,
+    webhook_headers,
+):
     registry = Registry()
     queue = asyncio.Queue(maxsize=1)
     queue.put_nowait({"existing": True})
@@ -132,7 +95,7 @@ async def test_full_queue_drops_event_without_failing_webhook():
     payload = {"repository": {"full_name": "octo/repo"}, "issue": {"number": 1}}
     body = json.dumps(payload).encode()
 
-    async with make_client(registry=registry, authenticator=_FakeAuthenticator()) as client:
+    async with make_client(registry=registry, authenticator=fake_authenticator) as client:
         response = await client.post("/webhook", content=body, headers=webhook_headers(body))
 
     assert response.status_code == 202
@@ -140,23 +103,27 @@ async def test_full_queue_drops_event_without_failing_webhook():
     assert queue.get_nowait() == {"existing": True}
 
 
-async def test_webhook_without_repository_returns_204():
+async def test_webhook_without_repository_returns_204(
+    make_client,
+    fake_authenticator,
+    webhook_headers,
+):
     body = b"{}"
-    async with make_client(authenticator=_FakeAuthenticator()) as client:
+    async with make_client(authenticator=fake_authenticator) as client:
         response = await client.post("/webhook", content=body, headers=webhook_headers(body))
 
     assert response.status_code == 204
 
 
-async def test_stream_requires_bearer_token():
-    async with make_client(authenticator=_FakeAuthenticator()) as client:
+async def test_stream_requires_bearer_token(make_client, fake_authenticator):
+    async with make_client(authenticator=fake_authenticator) as client:
         response = await client.get("/events/stream", params={"repo": "octo/repo", "events": "issues"})
 
     assert response.status_code == 401
 
 
-async def test_stream_rejects_unknown_repository():
-    async with make_client(authenticator=_FakeAuthenticator()) as client:
+async def test_stream_rejects_unknown_repository(make_client, fake_authenticator):
+    async with make_client(authenticator=fake_authenticator) as client:
         with anyio.fail_after(1):
             response = await client.get(
                 "/events/stream",
@@ -168,10 +135,9 @@ async def test_stream_rejects_unknown_repository():
     assert response.json() == {"detail": "Repository access denied"}
 
 
-async def test_stream_reports_unavailable_github():
-    authenticator = _FakeAuthenticator()
-    authenticator.access = Access(Verdict.UNAVAILABLE)
-    async with make_client(authenticator=authenticator) as client:
+async def test_stream_reports_unavailable_github(make_client, fake_authenticator):
+    fake_authenticator.access = Access(Verdict.UNAVAILABLE)
+    async with make_client(authenticator=fake_authenticator) as client:
         response = await client.get(
             "/events/stream",
             params={"repo": "octo/repo", "events": "issues"},
@@ -183,17 +149,19 @@ async def test_stream_reports_unavailable_github():
     assert response.json() == {"detail": "GitHub API unavailable"}
 
 
-async def test_unavailable_recheck_stays_open_and_retries_within_thirty_seconds(monkeypatch):
+async def test_unavailable_recheck_stays_open_and_retries_within_thirty_seconds(
+    monkeypatch,
+    fake_authenticator,
+):
     registry = Registry()
-    authenticator = _FakeAuthenticator()
-    authenticator.rechecks = [
+    fake_authenticator.rechecks = [
         Access(Verdict.UNAVAILABLE),
         Access(Verdict.DENIED),
     ]
     app = create_app(
         Settings(webhook_secret="secret", recheck_interval=60, ping_interval=60),
         registry=registry,
-        authenticator=authenticator,
+        authenticator=fake_authenticator,
     )
     request = Request(
         {
@@ -221,12 +189,15 @@ async def test_unavailable_recheck_stays_open_and_retries_within_thirty_seconds(
         await anext(response.body_iterator)
 
     assert timeouts == pytest.approx([60, 30], abs=0.01)
-    assert [call[2] for call in authenticator.calls] == [False, True, True]
+    assert [call[2] for call in fake_authenticator.calls] == [False, True, True]
     assert registry.connections == {}
 
 
-async def test_stream_rejects_bad_events_and_repository_names():
-    async with make_client(authenticator=_FakeAuthenticator()) as client:
+async def test_stream_rejects_bad_events_and_repository_names(
+    make_client,
+    fake_authenticator,
+):
+    async with make_client(authenticator=fake_authenticator) as client:
         bad_event = await client.get(
             "/events/stream",
             params={"repo": "octo/repo", "events": "push"},
@@ -242,9 +213,14 @@ async def test_stream_rejects_bad_events_and_repository_names():
     assert bad_repo.status_code == 422
 
 
-async def test_webhook_to_sse_respects_action_and_number_filters():
+async def test_webhook_to_sse_respects_action_and_number_filters(
+    make_client,
+    fake_authenticator,
+    wait_until_registered,
+    webhook_headers,
+    sse_data,
+):
     registry = Registry()
-    authenticator = _FakeAuthenticator()
     response: httpx2.Response | None = None
 
     async def consume(client):
@@ -261,7 +237,7 @@ async def test_webhook_to_sse_respects_action_and_number_filters():
         )
 
     async with (
-        make_client(registry=registry, authenticator=authenticator) as client,
+        make_client(registry=registry, authenticator=fake_authenticator) as client,
         anyio.create_task_group() as tasks,
     ):
         tasks.start_soon(consume, client)
@@ -285,7 +261,7 @@ async def test_webhook_to_sse_respects_action_and_number_filters():
                     "delivered": matched,
                     "dropped": 0,
                 }
-        authenticator.revoked = True
+        fake_authenticator.revoked = True
 
     assert response is not None
     assert response.status_code == 200
@@ -315,9 +291,187 @@ async def test_webhook_to_sse_respects_action_and_number_filters():
     ]
 
 
-async def test_recheck_closes_stream_after_access_revocation():
+class TestBurstOrdering:
+    """Delivery order for a burst buffered by one subscriber."""
+
+    async def test_single_subscriber_receives_burst_in_delivery_order(
+        self,
+        fake_authenticator,
+        make_app,
+        deliver,
+    ):
+        """Preserve webhook arrival order while draining a buffered burst."""
+        event_count = 10
+        registry = Registry()
+        app = make_app(
+            registry=registry,
+            authenticator=fake_authenticator,
+            queue_maxsize=event_count,
+        )
+        request = Request(
+            {
+                "type": "http",
+                "method": "GET",
+                "path": "/events/stream",
+                "headers": [(b"authorization", b"Bearer token")],
+                "query_string": b"",
+                "app": app,
+            }
+        )
+        stream = await _stream(request, repo="octo/repo", events="issues")
+        ready = await anext(stream.body_iterator)
+
+        deliveries = [
+            await deliver(
+                app,
+                "issues",
+                {
+                    "repository": {"full_name": "octo/repo"},
+                    "action": "opened",
+                    "issue": {"number": number},
+                },
+            )
+            for number in range(event_count)
+        ]
+        frames = [await anext(stream.body_iterator) for _ in range(event_count)]
+        await stream.body_iterator.aclose()
+
+        assert ready["event"] == "ready"
+        assert [delivery.json() for delivery in deliveries] == [
+            {"matched": 1, "delivered": 1, "dropped": 0}
+        ] * event_count
+        assert [json.loads(frame["data"])["number"] for frame in frames] == list(range(event_count))
+        assert registry.connections == {}
+
+
+class TestSubscriberFanOut:
+    """Fan-out and exclusion behavior across concurrent listeners."""
+
+    async def test_two_listeners_receive_match_but_exclude_other_event_and_repo(
+        self,
+        fake_authenticator,
+        make_app,
+        deliver,
+    ):
+        """Deliver once per matching listener without crossing filter boundaries."""
+        registry = Registry()
+        app = make_app(
+            registry=registry,
+            authenticator=fake_authenticator,
+            queue_maxsize=1,
+        )
+        request = Request(
+            {
+                "type": "http",
+                "method": "GET",
+                "path": "/events/stream",
+                "headers": [(b"authorization", b"Bearer token")],
+                "query_string": b"",
+                "app": app,
+            }
+        )
+        first = await _stream(request, repo="octo/repo", events="issues")
+        second = await _stream(request, repo="octo/repo", events="issues")
+        await anext(first.body_iterator)
+        await anext(second.body_iterator)
+
+        matching = await deliver(
+            app,
+            "issues",
+            {
+                "repository": {"full_name": "octo/repo"},
+                "action": "closed",
+                "issue": {"number": 42},
+            },
+        )
+        other_event = await deliver(
+            app,
+            "release",
+            {
+                "repository": {"full_name": "octo/repo"},
+                "action": "published",
+                "release": {"id": 7},
+            },
+        )
+        other_repo = await deliver(
+            app,
+            "issues",
+            {
+                "repository": {"full_name": "other/repo"},
+                "action": "closed",
+                "issue": {"number": 42},
+            },
+        )
+
+        assert matching.json() == {"matched": 2, "delivered": 2, "dropped": 0}
+        assert other_event.json() == {"matched": 0, "delivered": 0, "dropped": 0}
+        assert other_repo.json() == {"matched": 0, "delivered": 0, "dropped": 0}
+
+        first_frame = await anext(first.body_iterator)
+        second_frame = await anext(second.body_iterator)
+        await first.body_iterator.aclose()
+        await second.body_iterator.aclose()
+
+        assert json.loads(first_frame["data"])["number"] == 42
+        assert second_frame == first_frame
+        assert registry.connections == {}
+
+
+class TestSubscriberFanOutLoad:
+    """Fan-out behavior across many subscribers and events."""
+
+    async def test_fifty_subscribers_each_receive_one_hundred_events(
+        self,
+        fake_authenticator,
+        make_app,
+        deliver,
+    ):
+        """Deliver the complete ordered event set without a fan-out ceiling."""
+        await anyio.lowlevel.checkpoint()
+        subscriber_count = 50
+        event_count = 100
+        registry = Registry()
+        subscribers = [Subscriber(asyncio.Queue(maxsize=event_count)) for _ in range(subscriber_count)]
+        for subscriber in subscribers:
+            registry.register(
+                "octocat",
+                [Filter(repo="octo/repo", event="issues")],
+                subscriber,
+            )
+        app = make_app(registry=registry, authenticator=fake_authenticator)
+
+        deliveries = [
+            await deliver(
+                app,
+                "issues",
+                {
+                    "repository": {"full_name": "octo/repo"},
+                    "action": "opened",
+                    "issue": {"number": number},
+                },
+            )
+            for number in range(event_count)
+        ]
+
+        assert [delivery.json() for delivery in deliveries] == [
+            {
+                "matched": subscriber_count,
+                "delivered": subscriber_count,
+                "dropped": 0,
+            }
+        ] * event_count
+        assert [
+            [subscriber.queue.get_nowait()["number"] for _ in range(event_count)] for subscriber in subscribers
+        ] == [list(range(event_count))] * subscriber_count
+
+
+async def test_recheck_closes_stream_after_access_revocation(
+    make_client,
+    fake_authenticator,
+    wait_until_registered,
+    sse_data,
+):
     registry = Registry()
-    authenticator = _FakeAuthenticator()
     response: httpx2.Response | None = None
 
     async def consume(client):
@@ -329,12 +483,12 @@ async def test_recheck_closes_stream_after_access_revocation():
         )
 
     async with (
-        make_client(registry=registry, authenticator=authenticator) as client,
+        make_client(registry=registry, authenticator=fake_authenticator) as client,
         anyio.create_task_group() as tasks,
     ):
         tasks.start_soon(consume, client)
         await wait_until_registered(registry)
-        authenticator.revoked = True
+        fake_authenticator.revoked = True
 
     assert response is not None
     assert response.status_code == 200
@@ -350,13 +504,52 @@ async def test_recheck_closes_stream_after_access_revocation():
             ]
         }
     ]
-    assert ("token", "octo/repo", True) in authenticator.calls
+    assert ("token", "octo/repo", True) in fake_authenticator.calls
     assert registry.connections == {}
 
 
-async def test_stalled_listener_receives_exact_delivery_loss_count():
+async def test_configured_ping_interval_emits_comment(
+    make_client,
+    fake_authenticator,
+    wait_until_registered,
+):
     registry = Registry()
-    authenticator = _FakeAuthenticator()
+    response: httpx2.Response | None = None
+
+    async def consume(client):
+        nonlocal response
+        response = await client.get(
+            "/events/stream",
+            params={"repo": "octo/repo", "events": "issues"},
+            headers={"Authorization": "Bearer token"},
+        )
+
+    async with (
+        make_client(
+            registry=registry,
+            authenticator=fake_authenticator,
+            ping_interval=1,
+            recheck_interval=1.2,
+        ) as client,
+        anyio.create_task_group() as tasks,
+    ):
+        tasks.start_soon(consume, client)
+        await wait_until_registered(registry)
+        await anyio.sleep(1.05)
+        fake_authenticator.revoked = True
+
+    assert response is not None
+    assert response.status_code == 200
+    assert "event: ready" in response.text
+    assert any(line.startswith(": ping - ") for line in response.text.splitlines())
+    assert registry.connections == {}
+
+
+async def test_stalled_listener_receives_exact_delivery_loss_count(
+    fake_authenticator,
+    webhook_headers,
+):
+    registry = Registry()
     app = create_app(
         Settings(
             webhook_secret="secret",
@@ -365,7 +558,7 @@ async def test_stalled_listener_receives_exact_delivery_loss_count():
             queue_maxsize=3,
         ),
         registry=registry,
-        authenticator=authenticator,
+        authenticator=fake_authenticator,
     )
     request = Request(
         {

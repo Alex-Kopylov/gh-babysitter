@@ -1,65 +1,13 @@
 """Integration tests for the CLI listen core against the real server app."""
 
 import asyncio
-import hashlib
-import hmac
 import json
 
-import anyio.lowlevel
 import httpx2
 import pytest
 
 from gh_babysitter.cli import listen
-from gh_babysitter.server.app import create_app
-from gh_babysitter.server.auth import Access, Authenticator, Verdict
-from gh_babysitter.server.config import Settings
 from gh_babysitter.server.registry import Registry
-
-
-class _FakeAuthenticator:
-    def __init__(self) -> None:
-        self.revoked = False
-
-    async def verify(self, token: str, repo: str, *, fresh: bool = False) -> Access:
-        await anyio.lowlevel.checkpoint()
-        if token == "token" and repo == "octo/repo" and not self.revoked:
-            return Access(Verdict.ALLOWED, "octocat")
-        return Access(Verdict.DENIED)
-
-
-def make_app(registry: Registry, authenticator: Authenticator):
-    return create_app(
-        Settings(webhook_secret="secret", recheck_interval=0.01, ping_interval=60),
-        registry=registry,
-        authenticator=authenticator,
-    )
-
-
-def client_factory(app, github_handler=None):
-    def make(*, base_url, headers, **kwargs):
-        if base_url == "http://server":
-            transport = httpx2.ASGITransport(app=app)
-        else:
-            transport = httpx2.MockTransport(github_handler) if github_handler else None
-        return httpx2.AsyncClient(transport=transport, base_url=base_url, headers=headers, **kwargs)
-
-    return make
-
-
-async def wait_until_registered(registry: Registry) -> None:
-    with anyio.fail_after(1):
-        await anyio.lowlevel.checkpoint()
-        while not registry.connections:  # noqa: ASYNC110 - Registry has no notification hook.
-            await anyio.lowlevel.checkpoint()
-
-
-async def deliver(app, event, payload):
-    body = json.dumps(payload).encode()
-    digest = hmac.new(b"secret", body, hashlib.sha256).hexdigest()
-    headers = {"X-GitHub-Event": event, "X-Hub-Signature-256": f"sha256={digest}"}
-    async with httpx2.AsyncClient(transport=httpx2.ASGITransport(app=app), base_url="http://server") as client:
-        response = await client.post("/webhook", content=body, headers=headers)
-    assert response.status_code == 202
 
 
 @pytest.mark.parametrize(
@@ -69,11 +17,22 @@ async def deliver(app, event, payload):
         {"first_event": True},
     ],
 )
-async def test_listen_exits_after_requested_event_count(monkeypatch, capsys, exit_options):
+async def test_listen_exits_after_requested_event_count(
+    capsys,
+    exit_options,
+    fake_authenticator,
+    make_app,
+    client_factory,
+    wait_until_registered,
+    deliver,
+    fake_token,
+):
     registry = Registry()
-    authenticator = _FakeAuthenticator()
-    app = make_app(registry, authenticator)
-    monkeypatch.setattr(listen, "resolve_token", lambda: "token")
+    app = make_app(
+        registry=registry,
+        authenticator=fake_authenticator,
+        recheck_interval=0.01,
+    )
     task = asyncio.create_task(
         listen.listen(
             listen.ListenOptions(
@@ -92,17 +51,94 @@ async def test_listen_exits_after_requested_event_count(monkeypatch, capsys, exi
         "issues",
         {"repository": {"full_name": "octo/repo"}, "action": "opened", "issue": {"number": 42}},
     )
-    authenticator.revoked = True
+    fake_authenticator.revoked = True
 
     assert await task == 0
     assert json.loads(capsys.readouterr().out)["number"] == 42
 
 
-async def test_listen_until_exits_on_terminal_stream_event(monkeypatch, capsys):
+async def test_combined_filters_emit_only_exact_match(
+    capsys,
+    fake_authenticator,
+    make_app,
+    client_factory,
+    wait_until_registered,
+    deliver,
+    fake_token,
+):
     registry = Registry()
-    authenticator = _FakeAuthenticator()
-    app = make_app(registry, authenticator)
-    monkeypatch.setattr(listen, "resolve_token", lambda: "token")
+    app = make_app(
+        registry=registry,
+        authenticator=fake_authenticator,
+        recheck_interval=0.01,
+    )
+    task = asyncio.create_task(
+        listen.listen(
+            listen.ListenOptions(
+                repo="octo/repo",
+                events="issues",
+                number=42,
+                action="closed",
+                count=1,
+                timeout=1,
+                server="http://server",
+            ),
+            client_factory(app),
+        )
+    )
+    await wait_until_registered(registry)
+
+    opened = await deliver(
+        app,
+        "issues",
+        {
+            "repository": {"full_name": "octo/repo"},
+            "action": "opened",
+            "issue": {"number": 42},
+        },
+    )
+    wrong_number = await deliver(
+        app,
+        "issues",
+        {
+            "repository": {"full_name": "octo/repo"},
+            "action": "closed",
+            "issue": {"number": 41},
+        },
+    )
+    exact = await deliver(
+        app,
+        "issues",
+        {
+            "repository": {"full_name": "octo/repo"},
+            "action": "closed",
+            "issue": {"number": 42},
+        },
+    )
+    fake_authenticator.revoked = True
+
+    assert opened.json()["matched"] == 0
+    assert wrong_number.json()["matched"] == 0
+    assert exact.json()["matched"] == 1
+    assert await task == 0
+    assert json.loads(capsys.readouterr().out)["payload"]["issue"]["number"] == 42
+
+
+async def test_listen_until_exits_on_terminal_stream_event(
+    capsys,
+    fake_authenticator,
+    make_app,
+    client_factory,
+    wait_until_registered,
+    deliver,
+    fake_token,
+):
+    registry = Registry()
+    app = make_app(
+        registry=registry,
+        authenticator=fake_authenticator,
+        recheck_interval=0.01,
+    )
     github_requests = []
 
     def github_handler(request):
@@ -132,18 +168,26 @@ async def test_listen_until_exits_on_terminal_stream_event(monkeypatch, capsys):
             "pull_request": {"number": 42, "merged": True},
         },
     )
-    authenticator.revoked = True
+    fake_authenticator.revoked = True
 
     assert await task == 0
     assert [request.url.path for request in github_requests] == ["/repos/octo/repo/pulls/42"]
     assert json.loads(capsys.readouterr().out)["event"] == "pull_request"
 
 
-async def test_listen_until_polls_before_connecting(monkeypatch, capsys):
+async def test_listen_until_polls_before_connecting(
+    capsys,
+    fake_authenticator,
+    make_app,
+    client_factory,
+    fake_token,
+):
     registry = Registry()
-    authenticator = _FakeAuthenticator()
-    app = make_app(registry, authenticator)
-    monkeypatch.setattr(listen, "resolve_token", lambda: "token")
+    app = make_app(
+        registry=registry,
+        authenticator=fake_authenticator,
+        recheck_interval=0.01,
+    )
     github_requests = []
 
     def github_handler(request):
@@ -168,11 +212,66 @@ async def test_listen_until_polls_before_connecting(monkeypatch, capsys):
     assert capsys.readouterr().out == ""
 
 
-async def test_listen_timeout_returns_124(monkeypatch):
+async def test_stream_disconnect_with_satisfied_until_poll_exits_before_reconnect(
+    monkeypatch,
+    capsys,
+    fake_authenticator,
+    make_app,
+    client_factory,
+    wait_until_registered,
+    fake_token,
+):
     registry = Registry()
-    authenticator = _FakeAuthenticator()
-    app = make_app(registry, authenticator)
-    monkeypatch.setattr(listen, "resolve_token", lambda: "token")
+    app = make_app(
+        registry=registry,
+        authenticator=fake_authenticator,
+        recheck_interval=0.01,
+    )
+    github_requests = []
+
+    def github_handler(request):
+        github_requests.append(request)
+        return httpx2.Response(200, json={"merged": len(github_requests) == 2})
+
+    monkeypatch.setattr(listen.random, "uniform", lambda _low, _high: 0)
+    task = asyncio.create_task(
+        listen.listen(
+            listen.ListenOptions(
+                repo="octo/repo",
+                number=42,
+                until="merged",
+                timeout=1,
+                server="http://server",
+            ),
+            client_factory(app, github_handler),
+        )
+    )
+    await wait_until_registered(registry)
+    fake_authenticator.revoked = True
+
+    result = await task
+
+    assert result == 0
+    assert [request.url.path for request in github_requests] == [
+        "/repos/octo/repo/pulls/42",
+        "/repos/octo/repo/pulls/42",
+    ]
+    assert "warning: disconnected" not in capsys.readouterr().err
+    assert registry.connections == {}
+
+
+async def test_listen_timeout_returns_124(
+    fake_authenticator,
+    make_app,
+    client_factory,
+    fake_token,
+):
+    registry = Registry()
+    app = make_app(
+        registry=registry,
+        authenticator=fake_authenticator,
+        recheck_interval=0.01,
+    )
 
     result = await listen.listen(
         listen.ListenOptions(repo="octo/repo", events="issues", timeout=0.05, server="http://server"),

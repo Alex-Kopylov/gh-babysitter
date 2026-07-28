@@ -63,8 +63,14 @@ class _StreamState:
 
 
 def _install_httpcore2_shutdown_workaround(loop: asyncio.AbstractEventLoop) -> None:
-    # Work around httpcore2 2.7.0: httpcore2/_async/http11.py:311 catches
-    # GeneratorExit via `except BaseException`, then awaits. Delete when upstream fixes it.
+    # Work around httpcore2 2.7.0 through 2.9.1 (see issue #34). A successful exit abandons the
+    # SSE stream mid-iteration, and a plain `async for` never closes its iterator, so httpcore2's
+    # generators survive until loop.shutdown_asyncgens() closes them concurrently at process exit.
+    # That makes `finally: await iterator.aclose()` in httpcore2/_utils.py:61 suspend while
+    # unwinding GeneratorExit, and contextlib then raises. Only stderr is affected; the exit code
+    # is already correct. contextlib.aclosing() does not help: it closes our outermost generator
+    # and leaves the httpx2/httpcore2 chain abandoned regardless (measured identical, 40 runs).
+    # No released httpcore2 escapes this; 2.9.1 is byte-identical here. Delete when upstream fixes it.
     previous_handler = loop.get_exception_handler()
 
     def handle_exception(current_loop: asyncio.AbstractEventLoop, context: dict[str, Any]) -> None:
