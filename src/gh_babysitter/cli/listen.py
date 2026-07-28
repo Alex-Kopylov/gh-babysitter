@@ -5,9 +5,12 @@ from __future__ import annotations
 import asyncio
 import json
 import random
+import re
 import sys
 from dataclasses import dataclass
+from ipaddress import ip_address
 from typing import TYPE_CHECKING, Any
+from urllib.parse import urlsplit
 
 import httpx2
 import typer
@@ -21,6 +24,13 @@ from gh_babysitter.server.events import EVENT_MENU
 
 if TYPE_CHECKING:
     from collections.abc import Callable
+
+_REPO = re.compile(r"[A-Za-z0-9._-]+/[A-Za-z0-9._-]+")
+_RETRYABLE_STATUS = frozenset({408, 425, 429, 500, 502, 503, 504})
+_HTTP_CLIENT_ERROR = 400
+_HTTP_SERVER_ERROR = 500
+_HTTP_STATUS_LIMIT = 600
+_ASYNCGEN_SHUTDOWN_ERROR = "generator didn't stop after athrow()"
 
 
 @dataclass(frozen=True)
@@ -40,7 +50,85 @@ class ListenOptions:
     format: str = "json"
 
 
+@dataclass(frozen=True)
+class _Outcome:
+    exit_code: int | None = None
+    retry_reason: str | None = None
+
+
+@dataclass
+class _StreamState:
+    remaining: int | None
+    ready: bool = False
+
+
+def _install_httpcore2_shutdown_workaround(loop: asyncio.AbstractEventLoop) -> None:
+    # Work around httpcore2 2.7.0 through 2.9.1 (see issue #34). A successful exit abandons the
+    # SSE stream mid-iteration, and a plain `async for` never closes its iterator, so httpcore2's
+    # generators survive until loop.shutdown_asyncgens() closes them concurrently at process exit.
+    # That makes `finally: await iterator.aclose()` in httpcore2/_utils.py:61 suspend while
+    # unwinding GeneratorExit, and contextlib then raises. Only stderr is affected; the exit code
+    # is already correct. contextlib.aclosing() does not help: it closes our outermost generator
+    # and leaves the httpx2/httpcore2 chain abandoned regardless (measured identical, 40 runs).
+    # No released httpcore2 escapes this; 2.9.1 is byte-identical here. Delete when upstream fixes it.
+    previous_handler = loop.get_exception_handler()
+
+    def handle_exception(current_loop: asyncio.AbstractEventLoop, context: dict[str, Any]) -> None:
+        exception = context.get("exception")
+        asyncgen = context.get("asyncgen")
+        code = getattr(asyncgen, "ag_code", None)
+        filename = getattr(code, "co_filename", "")
+        if (
+            isinstance(exception, RuntimeError)
+            and str(exception) == _ASYNCGEN_SHUTDOWN_ERROR
+            and isinstance(filename, str)
+            and "httpcore2" in filename
+        ):
+            return
+        if previous_handler is None:
+            current_loop.default_exception_handler(context)
+        else:
+            previous_handler(current_loop, context)
+
+    loop.set_exception_handler(handle_exception)
+
+
+def _validate_target(options: ListenOptions) -> None:
+    if _REPO.fullmatch(options.repo) is None:
+        message = "--repo must be owner/name using only letters, digits, dots, underscores, and hyphens"
+        raise typer.BadParameter(message)
+    if options.number is not None and options.number < 1:
+        message = "--number must be at least 1"
+        raise typer.BadParameter(message)
+    if options.action is not None and not options.action:
+        message = "--action must not be empty"
+        raise typer.BadParameter(message)
+    try:
+        server_url = urlsplit(options.server)
+        valid_server = server_url.scheme in {"http", "https"} and server_url.hostname is not None
+    except ValueError:
+        valid_server = False
+    if not valid_server:
+        message = "--server must be an http or https URL with a host"
+        raise typer.BadParameter(message)
+
+
+def _guard_token_transport(server: str, *, insecure: bool) -> None:
+    server_url = urlsplit(server)
+    host = server_url.hostname or ""
+    try:
+        loopback = host == "localhost" or ip_address(host).is_loopback
+    except ValueError:
+        loopback = host == "localhost"
+    if server_url.scheme == "http" and not loopback and not insecure:
+        message = (
+            f"refusing to send a GitHub token over plain HTTP to {host}; use https:// or set GH_BABYSITTER_INSECURE=1"
+        )
+        raise typer.BadParameter(message)
+
+
 def _validated(options: ListenOptions) -> tuple[list[str], int | None]:
+    _validate_target(options)
     if options.until and options.number is None:
         message = "--until requires --number"
         raise typer.BadParameter(message)
@@ -83,29 +171,68 @@ def _print_event(envelope: dict[str, Any], output_format: str) -> None:
 async def _consume_stream(
     response: httpx2.Response,
     options: ListenOptions,
-    remaining: int | None,
-) -> tuple[int | None, int | None]:
+    state: _StreamState,
+) -> _Outcome:
+    await asyncio.sleep(0)
     async for event_type, data in parse_sse(response.aiter_lines()):
         if event_type == "ready":
+            state.ready = True
             print("subscribed", file=sys.stderr)
+            continue
+        if event_type == "lag":
+            dropped = json.loads(data)["dropped"]
+            print(f"warning: server dropped {dropped} events (consumer too slow)", file=sys.stderr)
             continue
         envelope = json.loads(data)
         _print_event(envelope, options.format)
         if options.until and satisfied_by_event(options.until, envelope):
-            return 0, remaining
-        if remaining is not None:
-            remaining -= 1
-            if remaining == 0:
-                return 0, remaining
-    return None, remaining
+            return _Outcome(exit_code=0)
+        if state.remaining is not None:
+            state.remaining -= 1
+            if state.remaining == 0:
+                return _Outcome(exit_code=0)
+    return _Outcome(retry_reason="stream ended")
 
 
-def _response_exit_code(response: httpx2.Response) -> int | None:
-    if response.status_code in {401, 403}:
-        print(f"server rejected the GitHub token ({response.status_code})", file=sys.stderr)
-        return 1
-    response.raise_for_status()
+async def _response_detail(response: httpx2.Response) -> str | None:
+    await response.aread()
+    try:
+        body = response.json()
+    except json.JSONDecodeError:
+        return None
+    if isinstance(body, dict) and isinstance(detail := body.get("detail"), str):
+        return detail
     return None
+
+
+async def _response_outcome(response: httpx2.Response) -> _Outcome:
+    await asyncio.sleep(0)
+    status = response.status_code
+    if status in {401, 403}:
+        print(f"server rejected the GitHub token ({status})", file=sys.stderr)
+        return _Outcome(exit_code=1)
+    if status in _RETRYABLE_STATUS or _HTTP_SERVER_ERROR <= status < _HTTP_STATUS_LIMIT:
+        return _Outcome(retry_reason=f"server returned {status}")
+    if _HTTP_CLIENT_ERROR <= status < _HTTP_SERVER_ERROR:
+        detail = await _response_detail(response)
+        print(f"error: {detail or f'server returned {status}'}", file=sys.stderr)
+        return _Outcome(exit_code=1)
+    return _Outcome()
+
+
+async def _stream_once(
+    server_client: httpx2.AsyncClient,
+    params: dict[str, str | int],
+    options: ListenOptions,
+    state: _StreamState,
+) -> _Outcome:
+    await asyncio.sleep(0)
+    state.ready = False
+    async with server_client.stream("GET", "/events/stream", params=params) as response:
+        outcome = await _response_outcome(response)
+        if outcome.exit_code is not None or outcome.retry_reason is not None:
+            return outcome
+        return await _consume_stream(response, options, state)
 
 
 async def _listen(
@@ -130,19 +257,17 @@ async def _listen(
     if options.action is not None:
         params["action"] = options.action
 
-    remaining = count
+    state = _StreamState(remaining=count)
     backoff = 1.0
     while True:
         try:
-            async with server_client.stream("GET", "/events/stream", params=params) as response:
-                if (exit_code := _response_exit_code(response)) is not None:
-                    return exit_code
-                backoff = 1.0
-                result, remaining = await _consume_stream(response, options, remaining)
-                if result is not None:
-                    return result
-        except httpx2.HTTPError:
-            pass
+            outcome = await _stream_once(server_client, params, options, state)
+        except httpx2.HTTPError as error:
+            outcome = _Outcome(retry_reason=str(error) or type(error).__name__)
+        if state.ready:
+            backoff = 1.0
+        if outcome.exit_code is not None:
+            return outcome.exit_code
 
         if (
             options.until is not None
@@ -151,7 +276,13 @@ async def _listen(
             and await satisfied_by_poll(options.until, github_client, options.repo, options.number)
         ):
             return 0
-        await asyncio.sleep(random.uniform(0.8, 1.2) * backoff)  # ruff:ignore[suspicious-non-cryptographic-random-usage]
+        delay = random.uniform(0.8, 1.2) * backoff  # ruff:ignore[suspicious-non-cryptographic-random-usage]
+        reason = outcome.retry_reason or "stream disconnected"
+        print(
+            f"warning: disconnected ({reason}); events during the gap are lost; reconnecting in {delay:.1f}s",
+            file=sys.stderr,
+        )
+        await asyncio.sleep(delay)
         backoff = min(backoff * 2, 30)
 
 
@@ -160,14 +291,17 @@ async def listen(
     client_factory: Callable[..., httpx2.AsyncClient] = httpx2.AsyncClient,
 ) -> int:
     """Listen for matching server events until an exit condition is met."""
+    _install_httpcore2_shutdown_workaround(asyncio.get_running_loop())
     await asyncio.sleep(0)
     events, count = _validated(options)
-    token = resolve_token()
     settings = get_settings()
-    # An SSE stream stays open indefinitely, so only its read timeout is unbounded.
+    if client_factory is httpx2.AsyncClient:
+        _guard_token_transport(options.server, insecure=settings.insecure)
+    token = resolve_token()
+    # The server emits keepalives, so a bounded read timeout detects half-dead streams.
     server_timeout = httpx2.Timeout(
         connect=settings.server_timeout,
-        read=None,
+        read=settings.stream_timeout,
         write=settings.server_timeout,
         pool=settings.server_timeout,
     )

@@ -48,9 +48,21 @@ class Settings(BaseSettings):
         default=None,
         validation_alias=AliasChoices("GH_TOKEN", "GITHUB_TOKEN"),
     )
+    webhook_secret: SecretStr | None = Field(
+        default=None,
+        validation_alias="GH_BABYSITTER_WEBHOOK_SECRET",
+    )
+    insecure: bool = Field(
+        default=False,
+        validation_alias="GH_BABYSITTER_INSECURE",
+    )
     server_timeout: float = Field(
         default=10,
         validation_alias="GH_BABYSITTER_SERVER_TIMEOUT",
+    )
+    stream_timeout: float = Field(
+        default=90,
+        validation_alias="GH_BABYSITTER_STREAM_TIMEOUT",
     )
     github_timeout: float = Field(
         default=10,

@@ -1,74 +1,242 @@
 # gh-babysitter
 
-Webhook-гейтвей с fan-out для GitHub-организации: **один** org-level webhook на входе — **индивидуальные** подписки разработчиков с тонкими фильтрами на выходе. Поток событий приходит прямо в консоль.
+gh-babysitter is an implemented webhook gateway and command-line client for
+filtered GitHub event streams. The current release is `1.0.0`.
 
-> Статус: спецификация. Имплементации пока нет. Имя проекта — рабочее.
+## Problem
 
-## Проблема
+GitHub webhooks deliver to endpoints configured in advance. Creating those
+hooks requires administrative access, and GitHub limits how many hooks can be
+attached to an organization or repository. Giving every developer or agent a
+separate hook does not scale, and webhook configuration can filter only by
+event type, not by repository object number or action.
 
-GitHub доставляет webhook только на заранее сконфигурированные endpoint'ы, создавать хуки могут только администраторы, а на репозиторий/организацию можно повесить максимум ~20 хуков. В организации с 10 репозиториями и ~100 разработчиками, где каждый хочет подписаться на ~5 своих срезов событий («все issues», «все PR», «только issue #42», «только PR #24»), это не работает ни организационно, ни физически.
+## Solution
 
-## Решение
+An administrator configures one organization webhook. gh-babysitter verifies
+and normalizes each delivery, matches it against connected subscribers, and
+fans it out over Server-Sent Events (SSE). A subscriber can filter by
+repository, event type, action, and issue or pull-request number.
 
-Один админский org-level webhook → маленький сервис-маршрутизатор → индивидуальные подписки с фильтрами вплоть до конкретного номера issue/PR → доставка потоком в CLI.
+The v1.0 event allowlist is `issues`, `pull_request`, `issue_comment`,
+`pull_request_review`, and `release`.
 
-```
-GitHub (1 org-level webhook, статический allowlist типов событий)
-   │  POST /webhook  + HMAC-подпись
+```text
+GitHub (one organization webhook, static event-type allowlist)
+   │  POST /webhook + HMAC signature
    ▼
-┌─────────────────── FastAPI, один процесс ───────────────────┐
-│  Ingress ── verify HMAC ── normalize(event, action, number) │
-│     │                                                        │
-│  Matcher ── реестр подписок в памяти                         │
-│     │           (= открытые SSE-соединения)                  │
-│  Dispatcher ── push в открытые SSE-соединения                │
-└──────────────────────────────────────────────────────────────┘
-   ▲▼ GET /events/stream — подписки в параметрах запроса (SSE)
-   └────────── CLI (gh-расширение), auth = gh auth token ──────┘
+┌────────────────── FastAPI, one process ────────────────────┐
+│  Ingress ── verify HMAC ── normalize(event, action, number)│
+│     │                                                       │
+│  Matcher ── in-memory subscription registry                │
+│     │           (= open SSE connections)                   │
+│  Dispatcher ── push to matching SSE connections            │
+└─────────────────────────────────────────────────────────────┘
+   ▲▼ GET /events/stream — filters in query parameters (SSE)
+   └────────── CLI (gh extension), auth = gh auth token ─────┘
 ```
 
-События нигде не хранятся: пришло → сматчилось → ушло в открытые соединения → забыто. Подписки тоже: они атрибут открытого соединения, живут в памяти и умирают вместе с ним — персистентного состояния у системы нет вообще, ни на сервере, ни у клиента.
+Events and subscriptions are memory-only. A subscription exists for exactly
+as long as its `listen` connection.
 
-**Не слушаешь — не получаешь.** Это принцип дизайна, а не ограничение: сервис доставляет события только клиентам с открытым соединением. It's not a bug, it's a feature.
+## Install
 
-**Целевой пользователь — AI-агент.** Claude Code / Codex CLI по запросу «babysit this PR» запускает `gh babysitter listen -R org/web -n 24 --until merged --timeout 12h`, блокируется до результата и выходит; Ctrl+C или конец сессии агента = отписка. Отсюда эфемерная модель подписок и exit-условия — [cli](docs/specs/05-cli.md).
+Prerequisites:
 
-## Ключевые решения
+- [uv](https://docs.astral.sh/uv/)
+- Python 3.14; uv can provision the interpreter
+- [GitHub CLI](https://cli.github.com/) authenticated with `gh auth login`
 
-| Область | Решение | Спека |
+Install as a GitHub CLI extension:
+
+```console
+gh extension install Alex-Kopylov/gh-babysitter
+gh babysitter --help
+```
+
+Alternatively, install the Python command directly:
+
+```console
+uv tool install git+https://github.com/Alex-Kopylov/gh-babysitter.git@v1.0.0
+gh-babysitter --help
+```
+
+The examples below use `gh babysitter`. If you used `uv tool install`, run the
+same subcommands with `gh-babysitter` instead.
+
+## Quickstart
+
+The server must be reachable by GitHub at an HTTPS URL. Configure DNS and TLS
+so that `https://hooks.example.com` reaches port 8000 on the server, then
+replace the example organization and repository names below.
+
+Export one webhook secret. Both `serve` and `setup` read the same value from
+the environment:
+
+```console
+export GH_BABYSITTER_WEBHOOK_SECRET="$(
+  uv run python -c 'import secrets; print(secrets.token_hex(32))'
+)"
+gh babysitter serve --host 0.0.0.0 --port 8000 &
+gh babysitter setup \
+  --org my-org \
+  --url https://hooks.example.com/webhook
+```
+
+Point the client at the server and start a subscription:
+
+```console
+export GH_BABYSITTER_SERVER=https://hooks.example.com
+gh babysitter listen -R my-org/api -E issues
+```
+
+Each matching webhook is printed as one JSON object per line on stdout. Stop
+the process to remove the subscription. Use `--format pretty` for a
+human-readable stream.
+
+The JSON object contains normalized fields and the complete GitHub payload:
+
+```json
+{
+  "ts": "2026-07-27T12:00:00Z",
+  "repo": "my-org/api",
+  "event": "issues",
+  "action": "opened",
+  "number": 42,
+  "payload": {}
+}
+```
+
+`action` and `number` are `null` when the GitHub event does not provide them.
+
+## Agent scenario
+
+An agent can wait for a specific pull request to merge, but stop after twelve
+hours:
+
+```console
+gh babysitter listen \
+  -R my-org/web \
+  -n 24 \
+  --until merged \
+  --timeout 12h
+```
+
+`--until` requires `-n` and automatically subscribes to the event types
+required for its target state, so `-E` is not needed in this example.
+
+| `--until` value | Required event | Exit condition |
 |---|---|---|
-| Целевой пользователь | AI-агент: эфемерные подписки (argv процесса `listen`), exit-условия `--until`/`--timeout` | [cli](docs/specs/05-cli.md) |
-| Доставка | SSE-поток в CLI (`listen`), stdout JSON lines | [delivery](docs/specs/02-delivery.md) |
-| Состояние | Никакого: подписки в памяти процесса, время жизни = SSE-соединение | [architecture](docs/specs/01-architecture.md), [delivery](docs/specs/02-delivery.md) |
-| Гарантии | At-most-once: без очереди, replay и истории | [delivery](docs/specs/02-delivery.md) |
-| Авторизация | Токен из `gh auth token`, проверка через GitHub API, без своей user base | [auth](docs/specs/03-auth.md) |
-| Конфиг вебхука | Статический allowlist типов событий, без динамической синхронизации | [github-webhook](docs/specs/04-github-webhook.md) |
-| Интеграция с GitHub | Org-webhook, а не GitHub App | [github-app (ADR)](docs/specs/06-github-app.md) |
-| CLI | gh-расширение в конвенциях `gh`, вдохновлено [cli/gh-webhook](https://github.com/cli/gh-webhook) | [cli](docs/specs/05-cli.md) |
-| Стек | Python + FastAPI + sse-starlette, CLI на Typer | [architecture](docs/specs/01-architecture.md) |
+| `merged` | `pull_request` | `closed` action with `payload.pull_request.merged` equal to `true` |
+| `closed` | `pull_request` or `issues` | `closed` action |
+| `approved` | `pull_request_review` | `submitted` action with review state `approved` |
+| `changes_requested` | `pull_request_review` | `submitted` action with review state `changes_requested` |
 
-## Документация
+## Configuration
 
-1. [Архитектура и модель данных](docs/specs/01-architecture.md) — компоненты, поток события, нормализация payload, матчинг, API.
-2. [Доставка событий](docs/specs/02-delivery.md) — SSE, жизненный цикл подписки (= соединение), формат события, at-most-once.
-3. [Авторизация и безопасность](docs/specs/03-auth.md) — аутентификация через `gh`, проверка доступа к репо, HMAC.
-4. [Webhook на стороне GitHub](docs/specs/04-github-webhook.md) — org-level хук, allowlist, разбор `gh-webhook`, локальная разработка.
-5. [CLI](docs/specs/05-cli.md) — `listen`, exit-условия, эфемерная модель подписок, упаковка как gh-расширение.
-6. [ADR: GitHub App](docs/specs/06-github-app.md) — почему org-webhook, а не GitHub App, и когда пересмотреть.
+### Server environment variables
 
-## Не-цели
+| Variable | Default | Purpose |
+|---|---:|---|
+| `GH_BABYSITTER_WEBHOOK_SECRET` | unset | HMAC secret shared with the GitHub organization webhook; required to accept deliveries |
+| `GH_BABYSITTER_GITHUB_API_URL` | `https://api.github.com` | GitHub API base URL used to verify subscriber identity and repository access |
+| `GH_BABYSITTER_AUTH_CACHE_TTL` | `300` | Seconds to cache allowed or denied authorization results |
+| `GH_BABYSITTER_RECHECK_INTERVAL` | `300` | Seconds between access checks for an open stream |
+| `GH_BABYSITTER_PING_INTERVAL` | `30` | Seconds between SSE keepalive comments; must stay well below the client's `GH_BABYSITTER_STREAM_TIMEOUT` |
+| `GH_BABYSITTER_QUEUE_MAXSIZE` | `256` | Maximum queued events per subscriber before new events are dropped |
 
-- **Гарантированная доставка**: нет очереди, нет replay, офлайн-клиент пропускает события.
-- **Горизонтальное масштабирование**: один процесс, вертикальный рост. Тысяча висящих SSE-соединений — не нагрузка.
-- **Персистентные подписки**: что слушать, знает только живой процесс `listen` — ни конфиг-файлов, ни серверного списка подписок, ни «памяти между сессиями».
-- **Собственный user management**: GitHub — единственный источник истины о пользователях и правах.
-- **Веб-интерфейс**: вся конфигурация из консоли, браузер не нужен ни для чего.
+### CLI environment variables
 
-## Открытые вопросы
+| Variable | Default | Purpose |
+|---|---:|---|
+| `GH_BABYSITTER_SERVER` | `http://localhost:8000` | Base URL for the gh-babysitter server |
+| `GH_BABYSITTER_WEBHOOK_SECRET` | unset | Secret reused by `setup` when `--secret-stdin` is not supplied |
+| `GH_BABYSITTER_GITHUB_API_URL` | unset | First environment override for the GitHub API base URL |
+| `GITHUB_API_URL` | unset | GitHub API base URL used when the gh-babysitter-specific value is unset |
+| `GH_HOST` | unset | GitHub CLI host from which an API URL is derived when neither API URL variable is set |
+| `GH_TOKEN` | unset | First environment source for the GitHub token |
+| `GITHUB_TOKEN` | unset | GitHub token used when `GH_TOKEN` is unset |
+| `GH_BABYSITTER_SERVER_TIMEOUT` | `10` | Connect, write, and pool timeout in seconds for server requests |
+| `GH_BABYSITTER_STREAM_TIMEOUT` | `90` | Read timeout in seconds for the SSE stream; must exceed the server's `GH_BABYSITTER_PING_INTERVAL` |
+| `GH_BABYSITTER_GITHUB_TIMEOUT` | `10` | Timeout in seconds for GitHub API requests |
+| `GH_BABYSITTER_INSECURE` | `0` | Set to `1` to allow sending a GitHub token over plain HTTP to a non-loopback server |
 
-- Итоговое имя проекта и команда CLI (рабочее: `gh babysitter ...`).
-- Точный формат события в stdout — [черновик envelope](docs/specs/02-delivery.md#формат-события).
-- Итоговое меню поддерживаемых типов событий — [черновик allowlist](docs/specs/04-github-webhook.md#статический-allowlist).
-- Матрица `--until` и коды выхода `listen` — [черновик](docs/specs/05-cli.md#exit-условия).
-- Период серверной перепроверки прав для долгоживущих соединений (порядок — минуты).
-- Упаковывать ли серверный процесс в то же gh-расширение (`gh babysitter serve`) — см. [ADR по GitHub App](docs/specs/06-github-app.md#что-из-предложения-принято).
+An explicit `--api-url` takes precedence over API URL environment variables.
+Without a token variable, the CLI runs `gh auth token`. The server reads only
+`GH_BABYSITTER_GITHUB_API_URL`; it does not inherit `GITHUB_API_URL` or
+`GH_HOST`.
+
+The stream read timeout and the server keepalive are coupled. A listener treats
+silence longer than `GH_BABYSITTER_STREAM_TIMEOUT` as a dead connection and
+reconnects, so that value must comfortably exceed
+`GH_BABYSITTER_PING_INTERVAL`; the defaults tolerate three missed pings. Raising
+the ping interval above the stream timeout, or terminating the stream behind a
+proxy that strips SSE comments, makes listeners reconnect on a fixed cycle and
+opens a blind window each time.
+
+## Exit codes
+
+| Code | Meaning |
+|---:|---|
+| `0` | An exit condition was met: `--until`, `--count`, or `--first-event` |
+| `1` | Runtime failure, such as a rejected token, permanently refused subscription, or protocol error |
+| `2` | Usage error, such as invalid flags, a malformed repository, or a non-positive number or timeout |
+| `124` | `--timeout` expired |
+
+Without an exit-condition flag, `listen` continues until interrupted or until a
+runtime failure occurs.
+
+## Delivery guarantees
+
+Delivery is at most once inside gh-babysitter: there is no replay, durable
+queue, or event history. Events received while a client is offline or
+reconnecting are lost.
+
+At most once does not mean that a GitHub activity is globally unique. GitHub
+can redeliver a webhook, so the same activity can reach a consumer more than
+once. Consumers must be idempotent.
+
+Each subscriber has a bounded in-memory queue. If a slow consumer overruns it,
+the webhook response reports `matched`, `delivered`, and `dropped` counts. When
+the consumer resumes, it receives a `lag` notice with its exact dropped-event
+count; dropped events are not replayed.
+
+The CLI prints a warning before every reconnect, including the cause, delay,
+and reminder that events in the gap are lost. With `--until`, it also polls
+GitHub at startup and after each reconnect. This boundary poll catches a
+terminal state reached before the stream opened or during the reconnect gap.
+
+## Security
+
+- `/webhook` verifies the `X-Hub-Signature-256` HMAC before parsing the body.
+- The CLI uses `GH_TOKEN`, `GITHUB_TOKEN`, or `gh auth token`. Subscriber
+  tokens remain in memory and are never written to disk by gh-babysitter.
+- The server verifies repository access through GitHub. A genuine denial
+  returns `403`; a rate-limited or unavailable GitHub API returns `503` and is
+  not cached as a denial.
+- The CLI refuses to send a GitHub token over plain HTTP to a non-loopback
+  host. Loopback HTTP remains available for development. Set
+  `GH_BABYSITTER_INSECURE=1` only for an explicitly accepted insecure
+  deployment.
+- `setup` reads a secret from `--secret-stdin`, then
+  `GH_BABYSITTER_WEBHOOK_SECRET`, or generates one. A supplied secret is never
+  echoed. A generated secret is printed once because no other copy exists.
+
+## Non-goals
+
+- Guaranteed delivery, replay, or offline catch-up
+- Horizontal scaling or a multi-process shared registry
+- Persistent subscriptions or server-side subscription management
+- A separate user database, OAuth flow, or gh-babysitter-issued credentials
+- A web interface
+
+## Design documentation
+
+The design specifications remain in Russian:
+
+1. [Architecture and data model](docs/specs/01-architecture.md)
+2. [Event delivery](docs/specs/02-delivery.md)
+3. [Authorization and security](docs/specs/03-auth.md)
+4. [GitHub webhook configuration](docs/specs/04-github-webhook.md)
+5. [CLI](docs/specs/05-cli.md)
+6. [ADR: GitHub App](docs/specs/06-github-app.md)

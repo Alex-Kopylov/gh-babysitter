@@ -16,4 +16,10 @@ def run(host: str, port: int) -> None:
             "warning: GH_BABYSITTER_WEBHOOK_SECRET is unset; webhooks will be rejected",
             file=sys.stderr,
         )
-    uvicorn.run(create_app(settings), host=host, port=port)
+    # SSE generators do not finish on their own, so bound uvicorn's graceful wait.
+    uvicorn.run(
+        create_app(settings),
+        host=host,
+        port=port,
+        timeout_graceful_shutdown=5,
+    )

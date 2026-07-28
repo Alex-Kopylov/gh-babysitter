@@ -96,7 +96,9 @@ async def test_setup_webhook_paginates_and_updates_matching_hook(monkeypatch, ca
     assert update_request.method == "PATCH"
     assert update_request.url.path == "/orgs/acme/hooks/9"
     assert json.loads(update_request.content)["events"] == ["issues", "release"]
-    assert capsys.readouterr().out.count("provided-secret") == 1
+    output = capsys.readouterr().out
+    assert "provided-secret" not in output
+    assert output == "webhook configured; reusing the supplied GH_BABYSITTER_WEBHOOK_SECRET\n"
 
 
 async def test_setup_webhook_rejects_events_outside_the_allowlist(monkeypatch):

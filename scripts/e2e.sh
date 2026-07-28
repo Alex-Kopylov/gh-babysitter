@@ -4,8 +4,11 @@ set -euo pipefail
 
 TMP_DIR=$(mktemp -d)
 REPO=""
+REPO_IS_DISPOSABLE=0
 declare -a PIDS=()
 declare -a LOG_FILES=()
+declare -a OPENED_ISSUES=()
+declare -a PREEXISTING_HOOKS=()
 
 dump_logs() {
     local line
@@ -23,7 +26,10 @@ dump_logs() {
 cleanup() {
     local alive
     local deadline
+    local hook_id
     local index
+    local issue
+    local known
     local pid
     local status
 
@@ -60,9 +66,33 @@ cleanup() {
         dump_logs
     fi
 
-    if [[ -n "${REPO}" ]] && ! gh repo delete "${REPO}" --yes >/dev/null 2>&1; then
-        printf 'WARNING: could not delete %s; the token may lack delete_repo. Delete it manually with: gh repo delete %q --yes\n' \
-            "${REPO}" "${REPO}" >&2
+    # `gh webhook forward` does not reliably remove its hook when killed, so any
+    # hook that appeared during this run is deleted here rather than left active
+    # on the repository.
+    if [[ -n "${REPO}" ]]; then
+        while IFS= read -r hook_id; do
+            [[ -n "${hook_id}" ]] || continue
+            for known in ${PREEXISTING_HOOKS[@]+"${PREEXISTING_HOOKS[@]}"}; do
+                if [[ "${hook_id}" == "${known}" ]]; then
+                    continue 2
+                fi
+            done
+            gh api -X DELETE "repos/${REPO}/hooks/${hook_id}" >/dev/null 2>&1 ||
+                printf 'WARNING: could not delete leftover hook %s on %s\n' "${hook_id}" "${REPO}" >&2
+        done < <(gh api "repos/${REPO}/hooks" --jq '.[].id' 2>/dev/null || true)
+    fi
+
+    if ((REPO_IS_DISPOSABLE)) && [[ -n "${REPO}" ]]; then
+        if ! gh repo delete "${REPO}" --yes >/dev/null 2>&1; then
+            printf 'WARNING: could not delete %s; the token may lack delete_repo. Delete it manually with: gh repo delete %q --yes\n' \
+                "${REPO}" "${REPO}" >&2
+        fi
+    elif [[ -n "${REPO}" ]]; then
+        # A caller-supplied repository is never deleted. Close what this run opened.
+        printf 'NOTE: keeping caller-supplied repository %s; closing issues opened by this run.\n' "${REPO}" >&2
+        for issue in "${OPENED_ISSUES[@]}"; do
+            gh api -X PATCH "repos/${REPO}/issues/${issue}" -f state=closed >/dev/null 2>&1 || true
+        done
     fi
 
     if [[ -n "${TMP_DIR}" && -d "${TMP_DIR}" ]]; then
@@ -101,6 +131,53 @@ wait_for_subscription() {
     fail "${label}" "listener did not subscribe within 30 seconds"
 }
 
+forwarded_hook_id() {
+    local candidate
+    local known
+
+    while IFS= read -r candidate; do
+        [[ -n "${candidate}" ]] || continue
+        for known in ${PREEXISTING_HOOKS[@]+"${PREEXISTING_HOOKS[@]}"}; do
+            if [[ "${candidate}" == "${known}" ]]; then
+                continue 2
+            fi
+        done
+        printf '%s\n' "${candidate}"
+        return 0
+    done < <(gh api "repos/${REPO}/hooks" --jq '.[].id' 2>/dev/null || true)
+    return 0
+}
+
+wait_for_delivery_path() {
+    local attempt
+    local deadline
+    local hook_id
+
+    hook_id=$(forwarded_hook_id)
+    if [[ -z "${hook_id}" ]]; then
+        fail Setup "could not identify the hook created by gh webhook forward"
+    fi
+
+    # GitHub can report the hook as created before `gh webhook forward` has
+    # finished wiring its relay, and deliveries in that window are dropped
+    # silently. Waiting only for the hook to exist made scenarios start on an
+    # unproven path and fail roughly one run in seven. Ping the hook until a
+    # delivery actually reaches the local server, which exercises the same
+    # GitHub -> forwarder -> server path the scenarios depend on.
+    for ((attempt = 1; attempt <= 12; attempt++)); do
+        gh api -X POST "repos/${REPO}/hooks/${hook_id}/pings" >/dev/null 2>&1
+        deadline=$((SECONDS + 5))
+        while ((SECONDS < deadline)); do
+            if grep -q 'POST /webhook' "${SERVER_LOG}"; then
+                printf 'Delivery path confirmed live after %s ping(s)\n' "${attempt}"
+                return 0
+            fi
+            sleep 0.5
+        done
+    done
+    fail Setup "no webhook delivery reached the server within 60 seconds"
+}
+
 trap 'cleanup "$?"' EXIT
 
 if ! command -v gh >/dev/null 2>&1; then
@@ -125,10 +202,20 @@ if ! command -v python3 >/dev/null 2>&1; then
     fail Preflight "python3 is not installed"
 fi
 
-OWNER=$(gh api user --jq .login)
-REPO="${OWNER}/gh-babysitter-e2e-$(date +%s)"
-if ! gh repo create "${REPO}" --private --add-readme; then
-    fail Setup "could not create ${REPO}"
+if [[ -n "${GH_BABYSITTER_E2E_REPO:-}" ]]; then
+    # Caller supplied a repository: reuse it and never delete it.
+    REPO="${GH_BABYSITTER_E2E_REPO}"
+    if ! gh repo view "${REPO}" --json nameWithOwner >/dev/null 2>&1; then
+        fail Setup "cannot access ${REPO}"
+    fi
+    printf 'Using caller-supplied repository %s (it will not be deleted)\n' "${REPO}"
+else
+    OWNER=$(gh api user --jq .login)
+    REPO="${OWNER}/gh-babysitter-e2e-$(date +%s)"
+    REPO_IS_DISPOSABLE=1
+    if ! gh repo create "${REPO}" --private --add-readme; then
+        fail Setup "could not create ${REPO}"
+    fi
 fi
 
 if ! PORT=$(python3 - <<'PY'
@@ -179,6 +266,8 @@ if ((SERVER_READY == 0)); then
     fail Setup "server did not return HTTP 401 within 30 seconds"
 fi
 
+mapfile -t PREEXISTING_HOOKS < <(gh api "repos/${REPO}/hooks" --jq '.[].id' 2>/dev/null || true)
+
 gh webhook forward \
     --repo="${REPO}" \
     --events='issues,pull_request,issue_comment,pull_request_review,release' \
@@ -205,6 +294,8 @@ if ((HOOK_READY == 0)); then
     fail Setup "GitHub did not report an active repository hook within 30 seconds"
 fi
 
+wait_for_delivery_path
+
 A_STDOUT="${TMP_DIR}/scenario-a.stdout"
 A_STDERR="${TMP_DIR}/scenario-a.stderr"
 LOG_FILES+=("${A_STDOUT}" "${A_STDERR}")
@@ -224,6 +315,7 @@ fi
 if [[ ! "${ISSUE}" =~ ^[0-9]+$ ]]; then
     fail "Scenario A" "GitHub returned an invalid issue number: ${ISSUE}"
 fi
+OPENED_ISSUES+=("${ISSUE}")
 if wait "${A_PID}"; then
     A_STATUS=0
 else
