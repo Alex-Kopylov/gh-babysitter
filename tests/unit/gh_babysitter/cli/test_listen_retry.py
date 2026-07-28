@@ -230,6 +230,64 @@ async def test_transport_error_prints_disconnect_warning(
     )
 
 
+async def test_until_stream_task_http_error_reuses_retry_handling(
+    monkeypatch,
+    capsys,
+    fake_token,
+    envelope,
+    sse_body,
+):
+    server_requests = []
+    github_requests = []
+    terminal_event = envelope(
+        event="pull_request",
+        action="closed",
+        payload={"pull_request": {"merged": True}},
+    )
+
+    def server_handler(request):
+        server_requests.append(request)
+        if len(server_requests) == 1:
+            raise httpx2.ConnectError("connection refused")
+        return httpx2.Response(
+            200,
+            headers={"content-type": "text/event-stream"},
+            content=sse_body(f"data: {json.dumps(terminal_event)}"),
+        )
+
+    def github_handler(request):
+        github_requests.append(request)
+        return httpx2.Response(200, json={"merged": False})
+
+    def client_factory(*, base_url, **kwargs):
+        handler = server_handler if base_url == "https://babysitter.example" else github_handler
+        return httpx2.AsyncClient(
+            base_url=base_url,
+            transport=httpx2.MockTransport(handler),
+            **kwargs,
+        )
+
+    monkeypatch.setattr(listen.random, "uniform", lambda _low, _high: 0)
+    with anyio.fail_after(1):
+        result = await listen.listen(
+            listen.ListenOptions(
+                repo="octo/repo",
+                number=42,
+                until="merged",
+                server="https://babysitter.example",
+            ),
+            client_factory,
+        )
+
+    assert result == 0
+    assert len(server_requests) == 2
+    assert len(github_requests) == 2
+    assert (
+        "warning: disconnected (connection refused); events during the gap are lost; reconnecting in 0.0s"
+        in capsys.readouterr().err
+    )
+
+
 async def test_lag_event_warns_without_consuming_event_count(
     capsys,
     fake_token,

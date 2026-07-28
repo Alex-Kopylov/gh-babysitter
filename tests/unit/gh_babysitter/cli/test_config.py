@@ -16,6 +16,7 @@ def _clear_settings_environment(monkeypatch, tmp_path):
         "GH_BABYSITTER_SERVER",
         "GH_BABYSITTER_SERVER_TIMEOUT",
         "GH_BABYSITTER_STREAM_TIMEOUT",
+        "GH_BABYSITTER_UNTIL_POLL_INTERVAL",
         "GH_BABYSITTER_WEBHOOK_SECRET",
         "GITHUB_API_URL",
         "GITHUB_TOKEN",
@@ -40,6 +41,7 @@ def test_settings_use_defaults():
     assert settings.server_timeout == 10
     assert settings.stream_timeout == 90
     assert settings.github_timeout == 10
+    assert settings.until_poll_interval == 300
 
 
 def test_settings_allow_explicit_insecure_transport(monkeypatch):
@@ -65,6 +67,20 @@ def test_invalid_timeout_raises_validation_error(monkeypatch):
 
     with pytest.raises(ValidationError, match="GH_BABYSITTER_SERVER_TIMEOUT"):
         _config_module().Settings(_env_file=None)
+
+
+@pytest.mark.parametrize("value", ["0", "-0.1"])
+def test_non_positive_until_poll_interval_raises_validation_error(monkeypatch, value):
+    monkeypatch.setenv("GH_BABYSITTER_UNTIL_POLL_INTERVAL", value)
+
+    with pytest.raises(ValidationError, match="GH_BABYSITTER_UNTIL_POLL_INTERVAL"):
+        _config_module().Settings(_env_file=None)
+
+
+def test_settings_read_until_poll_interval_from_environment(monkeypatch):
+    monkeypatch.setenv("GH_BABYSITTER_UNTIL_POLL_INTERVAL", "0.05")
+
+    assert _config_module().Settings(_env_file=None).until_poll_interval == 0.05
 
 
 def test_settings_use_gh_babysitter_github_api_url(monkeypatch):

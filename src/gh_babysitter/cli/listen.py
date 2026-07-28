@@ -7,6 +7,7 @@ import json
 import random
 import re
 import sys
+from contextlib import suppress
 from dataclasses import dataclass
 from ipaddress import ip_address
 from typing import TYPE_CHECKING, Any
@@ -235,6 +236,46 @@ async def _stream_once(
         return await _consume_stream(response, options, state)
 
 
+async def _terminal_state_reached(
+    options: ListenOptions,
+    github_client: httpx2.AsyncClient | None,
+) -> bool:
+    """Return whether the --until target has already reached its terminal state."""
+    return (  # noqa: ASYNC910 - Inapplicable polls must not introduce a checkpoint.
+        options.until is not None
+        and github_client is not None
+        and options.number is not None
+        and await satisfied_by_poll(options.until, github_client, options.repo, options.number)
+    )
+
+
+async def _poll_until_terminal(
+    options: ListenOptions,
+    github_client: httpx2.AsyncClient,
+    interval: float,
+) -> None:
+    while True:
+        await asyncio.sleep(interval)
+        if await _terminal_state_reached(options, github_client):
+            return
+
+
+async def _race_stream_and_poll(
+    stream_task: asyncio.Task[_Outcome],
+    poll_task: asyncio.Task[None],
+) -> _Outcome:
+    tasks: set[asyncio.Task[Any]] = {stream_task, poll_task}
+    done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+    for task in pending:
+        task.cancel()
+        with suppress(asyncio.CancelledError):
+            await task
+    if poll_task in done and not poll_task.cancelled():
+        poll_task.result()
+        return _Outcome(exit_code=0)
+    return stream_task.result()
+
+
 async def _listen(
     options: ListenOptions,
     events: list[str],
@@ -243,12 +284,7 @@ async def _listen(
     github_client: httpx2.AsyncClient | None,
 ) -> int:
     await asyncio.sleep(0)
-    if (
-        options.until is not None
-        and github_client is not None
-        and options.number is not None
-        and await satisfied_by_poll(options.until, github_client, options.repo, options.number)
-    ):
+    if await _terminal_state_reached(options, github_client):
         return 0
 
     params: dict[str, str | int] = {"repo": options.repo, "events": ",".join(events)}
@@ -261,7 +297,19 @@ async def _listen(
     backoff = 1.0
     while True:
         try:
-            outcome = await _stream_once(server_client, params, options, state)
+            if options.until is not None and github_client is not None and options.number is not None:
+                outcome = await _race_stream_and_poll(
+                    asyncio.create_task(_stream_once(server_client, params, options, state)),
+                    asyncio.create_task(
+                        _poll_until_terminal(
+                            options,
+                            github_client,
+                            get_settings().until_poll_interval,
+                        ),
+                    ),
+                )
+            else:
+                outcome = await _stream_once(server_client, params, options, state)
         except httpx2.HTTPError as error:
             outcome = _Outcome(retry_reason=str(error) or type(error).__name__)
         if state.ready:
@@ -269,12 +317,7 @@ async def _listen(
         if outcome.exit_code is not None:
             return outcome.exit_code
 
-        if (
-            options.until is not None
-            and github_client is not None
-            and options.number is not None
-            and await satisfied_by_poll(options.until, github_client, options.repo, options.number)
-        ):
+        if await _terminal_state_reached(options, github_client):
             return 0
         delay = random.uniform(0.8, 1.2) * backoff  # ruff:ignore[suspicious-non-cryptographic-random-usage]
         reason = outcome.retry_reason or "stream disconnected"
