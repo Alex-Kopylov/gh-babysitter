@@ -230,6 +230,37 @@ terminal state reached before the stream opened or during the reconnect gap.
 - A separate user database, OAuth flow, or gh-babysitter-issued credentials
 - A web interface
 
+## Known limitations in 1.0.0
+
+These are open, reproduced, and tracked. They are listed here rather than left
+to be rediscovered.
+
+**`--until` can wait out its timeout after the event already happened.**
+The terminal-state poll runs at startup and after each reconnect. If the
+terminal event is lost while the connection stays healthy — which at-most-once
+delivery permits — nothing re-polls, so `listen` waits until `--timeout` and
+exits `124` even though the pull request merged. Mitigate by keeping
+`--timeout` tight enough to retry, or by re-checking the object yourself on a
+`124` exit. Tracked in [#42](https://github.com/Alex-Kopylov/gh-babysitter/issues/42).
+
+**A successful exit may print an httpcore2 traceback.** Abandoning the SSE
+stream on a successful exit triggers an upstream async-generator finalization
+bug. gh-babysitter filters that exact signature from stderr, so it should not
+be visible; if a future upstream change alters the message it will reappear.
+The exit code is unaffected and is always correct. Tracked in
+[#34](https://github.com/Alex-Kopylov/gh-babysitter/issues/34).
+
+**Repository rename, transfer, and deletion are unsupported.** A subscription
+matches on `repository.full_name` as delivered by GitHub. If a repository is
+renamed or transferred mid-subscription, the running `listen` stops matching
+and does not report why. Restart it against the new name.
+
+**Installing from a private repository needs credentials.** While this
+repository is private, `uv tool install git+https://...` fails with
+`could not read Username for 'https://github.com'` unless git is configured
+with credentials. `gh extension install` is unaffected, because `gh` is already
+authenticated.
+
 ## Live authorization E2E
 
 The release fixture uses two private repositories and two fine-grained personal
