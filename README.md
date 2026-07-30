@@ -1,7 +1,7 @@
 # gh-babysitter
 
 gh-babysitter is an implemented webhook gateway and command-line client for
-filtered GitHub event streams. The current release is `1.0.0`.
+filtered GitHub event streams. The current release is `1.1.0`.
 
 ## Problem
 
@@ -57,7 +57,7 @@ gh babysitter --help
 Alternatively, install the Python command directly:
 
 ```console
-uv tool install git+https://github.com/Alex-Kopylov/gh-babysitter.git@v1.0.0
+uv tool install git+https://github.com/Alex-Kopylov/gh-babysitter.git@v1.1.0
 gh-babysitter --help
 ```
 
@@ -234,27 +234,21 @@ after its terminal event was lost on an otherwise healthy connection.
 - A separate user database, OAuth flow, or gh-babysitter-issued credentials
 - A web interface
 
-## Known limitations in 1.0.0
+## Known limitations in 1.1.0
 
-These were reproduced and tracked. They remain listed here so that 1.0.0
-behavior and any later fixes are not left to be rediscovered.
+**Lost terminal events are recovered by polling, not replay.** With `--until`,
+a terminal event lost while the SSE connection stays healthy can delay
+successful completion until the next
+`GH_BABYSITTER_UNTIL_POLL_INTERVAL` (300 seconds by default), plus the GitHub
+request time. This observes the current GitHub state; it does not add replay or
+change the at-most-once delivery contract.
 
-**`--until` recovery from a lost terminal event is bounded by polling.**
-In 1.0.0, terminal-state polls ran only at connection boundaries, so a terminal
-event lost while the connection stayed healthy could leave `listen` waiting
-until `--timeout`. Starting in 1.1.0, `listen --until` also polls GitHub while
-connected, after each `GH_BABYSITTER_UNTIL_POLL_INTERVAL` (300 seconds by
-default). A lost terminal event can therefore delay successful completion by
-at most one interval plus the GitHub request time, rather than the full
-`--timeout`. This observes current state; it does not add replay or change the
-at-most-once delivery contract. Fixed in
-[#42](https://github.com/Alex-Kopylov/gh-babysitter/issues/42).
-
-**A successful exit may print an httpcore2 traceback.** Abandoning the SSE
-stream on a successful exit triggers an upstream async-generator finalization
-bug. gh-babysitter filters that exact signature from stderr, so it should not
-be visible; if a future upstream change alters the message it will reappear.
-The exit code is unaffected and is always correct. Tracked in
+**Successful stream teardown depends on a narrow httpcore2 workaround.**
+Abandoning an active SSE stream triggers an upstream async-generator
+finalization bug. gh-babysitter filters that exact traceback signature from
+stderr while preserving the correct exit code. If a future upstream change
+alters the signature, the traceback will reappear until the workaround is
+updated or removed. Tracked in
 [#34](https://github.com/Alex-Kopylov/gh-babysitter/issues/34).
 
 **Repository rename, transfer, and deletion are unsupported.** A subscription
