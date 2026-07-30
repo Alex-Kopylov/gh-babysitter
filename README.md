@@ -159,6 +159,7 @@ required for its target state, so `-E` is not needed in this example.
 | `GH_BABYSITTER_SERVER_TIMEOUT` | `10` | Connect, write, and pool timeout in seconds for server requests |
 | `GH_BABYSITTER_STREAM_TIMEOUT` | `90` | Read timeout in seconds for the SSE stream; must exceed the server's `GH_BABYSITTER_PING_INTERVAL` |
 | `GH_BABYSITTER_GITHUB_TIMEOUT` | `10` | Timeout in seconds for GitHub API requests |
+| `GH_BABYSITTER_UNTIL_POLL_INTERVAL` | `300` | Seconds between GitHub state checks while `listen --until` remains connected |
 | `GH_BABYSITTER_INSECURE` | `0` | Set to `1` to allow sending a GitHub token over plain HTTP to a non-loopback server |
 
 An explicit `--api-url` takes precedence over API URL environment variables.
@@ -203,8 +204,11 @@ count; dropped events are not replayed.
 
 The CLI prints a warning before every reconnect, including the cause, delay,
 and reminder that events in the gap are lost. With `--until`, it also polls
-GitHub at startup and after each reconnect. This boundary poll catches a
-terminal state reached before the stream opened or during the reconnect gap.
+GitHub at startup, before each reconnect, and periodically while the stream
+remains connected. The periodic interval defaults to 300 seconds and is
+configured with `GH_BABYSITTER_UNTIL_POLL_INTERVAL`. These checks catch a
+terminal state reached before the stream opened, during the reconnect gap, or
+after its terminal event was lost on an otherwise healthy connection.
 
 ## Security
 
@@ -232,16 +236,19 @@ terminal state reached before the stream opened or during the reconnect gap.
 
 ## Known limitations in 1.0.0
 
-These are open, reproduced, and tracked. They are listed here rather than left
-to be rediscovered.
+These were reproduced and tracked. They remain listed here so that 1.0.0
+behavior and any later fixes are not left to be rediscovered.
 
-**`--until` can wait out its timeout after the event already happened.**
-The terminal-state poll runs at startup and after each reconnect. If the
-terminal event is lost while the connection stays healthy — which at-most-once
-delivery permits — nothing re-polls, so `listen` waits until `--timeout` and
-exits `124` even though the pull request merged. Mitigate by keeping
-`--timeout` tight enough to retry, or by re-checking the object yourself on a
-`124` exit. Tracked in [#42](https://github.com/Alex-Kopylov/gh-babysitter/issues/42).
+**`--until` recovery from a lost terminal event is bounded by polling.**
+In 1.0.0, terminal-state polls ran only at connection boundaries, so a terminal
+event lost while the connection stayed healthy could leave `listen` waiting
+until `--timeout`. Starting in 1.1.0, `listen --until` also polls GitHub while
+connected, after each `GH_BABYSITTER_UNTIL_POLL_INTERVAL` (300 seconds by
+default). A lost terminal event can therefore delay successful completion by
+at most one interval plus the GitHub request time, rather than the full
+`--timeout`. This observes current state; it does not add replay or change the
+at-most-once delivery contract. Fixed in
+[#42](https://github.com/Alex-Kopylov/gh-babysitter/issues/42).
 
 **A successful exit may print an httpcore2 traceback.** Abandoning the SSE
 stream on a successful exit triggers an upstream async-generator finalization

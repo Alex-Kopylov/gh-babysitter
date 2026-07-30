@@ -68,6 +68,11 @@ class Settings(BaseSettings):
         default=10,
         validation_alias="GH_BABYSITTER_GITHUB_TIMEOUT",
     )
+    until_poll_interval: float = Field(
+        default=300,
+        validation_alias="GH_BABYSITTER_UNTIL_POLL_INTERVAL",
+        gt=0,
+    )
 
     @computed_field
     @property

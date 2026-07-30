@@ -6,6 +6,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.0] - 2026-07-28
+
+### Fixed in 1.1.0
+
+- `listen --until` now polls GitHub periodically while its SSE connection
+  remains healthy, bounding detection of a lost terminal event by the new
+  `GH_BABYSITTER_UNTIL_POLL_INTERVAL` setting (300 seconds by default) instead
+  of waiting until `--timeout`.
+
 ## [1.0.0] - 2026-07-27
 
 This release resolves the black-box audit findings tracked in
@@ -65,4 +74,5 @@ This release resolves the black-box audit findings tracked in
   stdin or `GH_BABYSITTER_WEBHOOK_SECRET` without echoing it.
 - Webhook bodies are parsed only after successful HMAC verification.
 
+[1.1.0]: https://github.com/Alex-Kopylov/gh-babysitter/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/Alex-Kopylov/gh-babysitter/releases/tag/v1.0.0

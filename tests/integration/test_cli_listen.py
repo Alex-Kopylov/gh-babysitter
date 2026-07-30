@@ -172,7 +172,10 @@ async def test_listen_until_exits_on_terminal_stream_event(
 
     assert await task == 0
     assert [request.url.path for request in github_requests] == ["/repos/octo/repo/pulls/42"]
-    assert json.loads(capsys.readouterr().out)["event"] == "pull_request"
+    output = capsys.readouterr()
+    assert output.out.count("\n") == 1
+    assert json.loads(output.out)["event"] == "pull_request"
+    assert output.err.count("subscribed") == 1
 
 
 async def test_listen_until_polls_before_connecting(

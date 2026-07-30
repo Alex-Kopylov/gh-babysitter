@@ -4,7 +4,7 @@ import asyncio
 import json
 from types import SimpleNamespace
 from typing import Any, cast
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
 
 import anyio.lowlevel
 import httpx2
@@ -135,6 +135,63 @@ async def test_listen_with_number_and_action_sends_query_parameters(fake_token, 
         "number": 42,
         "action": "closed",
     }
+
+
+async def test_listen_without_until_creates_no_poll_task_or_github_client(
+    monkeypatch,
+    fake_token,
+    envelope,
+):
+    event = envelope()
+    calls = []
+    poll = AsyncMock()
+    original_create_task = asyncio.create_task
+    create_task = Mock(wraps=original_create_task)
+    monkeypatch.setattr(listen, "satisfied_by_poll", poll)
+    monkeypatch.setattr(listen.asyncio, "create_task", create_task)
+
+    result = await listen.listen(
+        listen.ListenOptions(repo="octo/repo", events="issues", count=1),
+        lambda **kwargs: (
+            calls.append(kwargs)
+            or cast(
+                "httpx2.AsyncClient",
+                _Client(_Response(f"data: {json.dumps(event)}", "")),
+            )
+        ),
+    )
+
+    assert result == 0
+    assert [call["base_url"] for call in calls] == ["http://localhost:8000"]
+    poll.assert_not_awaited()
+    create_task.assert_not_called()
+
+
+async def test_poll_until_terminal_waits_before_first_check(monkeypatch):
+    order = []
+    options = listen.ListenOptions(repo="octo/repo", number=42, until="merged")
+    github_client = cast("httpx2.AsyncClient", object())
+
+    def sleep(interval):
+        order.append(("sleep", interval))
+
+    def terminal_state_reached(current_options, current_client):
+        order.append(("poll", current_options, current_client))
+        return True
+
+    monkeypatch.setattr(listen.asyncio, "sleep", AsyncMock(side_effect=sleep))
+    monkeypatch.setattr(
+        listen,
+        "_terminal_state_reached",
+        AsyncMock(side_effect=terminal_state_reached),
+    )
+
+    await listen._poll_until_terminal(options, github_client, 0.05)  # ruff:ignore[private-member-access]
+
+    assert order == [
+        ("sleep", 0.05),
+        ("poll", options, github_client),
+    ]
 
 
 async def test_listen_refuses_plain_http_to_non_loopback_before_resolving_token(monkeypatch):
