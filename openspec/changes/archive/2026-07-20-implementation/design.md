@@ -1,6 +1,6 @@
 # Implementation plan — 2026-07-20
 
-Implements [docs/specs](../specs/01-architecture.md). This file resolves the spec's
+Implements [openspec/specs](../../../specs/event-gateway/spec.md). This file resolves the spec's
 open questions with the drafts and pins module interfaces. Specs win on conflict,
 except where a draft is explicitly promoted to a decision here.
 
@@ -8,9 +8,9 @@ except where a draft is explicitly promoted to a decision here.
 
 | Question | Decision |
 |---|---|
-| Event envelope | Draft from [delivery](../specs/02-delivery.md#формат-события) as-is: `{ts, repo, event, action, number, payload}` |
+| Event envelope | Draft from [delivery](../../../specs/event-delivery/spec.md) as-is: `{ts, repo, event, action, number, payload}` |
 | Event menu | `issues, pull_request, issue_comment, pull_request_review, release` |
-| `--until` matrix / exit codes | Draft from [cli](../specs/05-cli.md#exit-условия) as-is |
+| `--until` matrix / exit codes | Draft from [cli](../../../specs/cli/spec.md) as-is |
 | Recheck period | 300 s default, env-configurable; recheck bypasses the auth cache (fresh GitHub call) and refreshes it |
 | `serve` in the same extension | Yes: `gh-babysitter serve` runs uvicorn — one distribution, three commands |
 | CLI finds the server via | `--server URL` flag, env `GH_BABYSITTER_SERVER`, default `http://localhost:8000` |
@@ -28,7 +28,7 @@ Dev (add to `dev` group): `pytest-asyncio`, `anyio`.
   (`https://api.github.com`), `AUTH_CACHE_TTL` (300), `RECHECK_INTERVAL` (300),
   `PING_INTERVAL` (30), `QUEUE_MAXSIZE` (256).
 - `events.py` — `EVENT_MENU: frozenset[str]` (menu above) and number extraction
-  per [normalization table](../specs/01-architecture.md#нормализация-payload):
+  per [normalization table](../../../specs/event-gateway/spec.md):
   `issues`/`issue_comment` → `payload.issue.number`, `pull_request` /
   `pull_request_review` → `payload.pull_request.number`, else `None`.
 - `signature.py` — `verify_signature(secret: str, body: bytes, header: str | None) -> bool`.
@@ -80,7 +80,7 @@ Dev (add to `dev` group): `pytest-asyncio`, `anyio`.
 - `sse.py` — minimal SSE parser over an async byte-line iterator → yields
   `(event_type, data_str)`; handles multi-line `data:`, `event:`, comments,
   blank-line dispatch. No external SSE client dep.
-- `until.py` — `UNTIL_MATRIX` per the [spec draft](../specs/05-cli.md#матрица---until-черновик):
+- `until.py` — `UNTIL_MATRIX` per the [spec draft](../../../specs/cli/spec.md):
   - required subscription events: `merged` → `{pull_request}`, `closed` →
     `{pull_request, issues}`, `approved`/`changes_requested` → `{pull_request_review}`.
   - `satisfied_by_event(until, envelope) -> bool` — exact draft matrix.

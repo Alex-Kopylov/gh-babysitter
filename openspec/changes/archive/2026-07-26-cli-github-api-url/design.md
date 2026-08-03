@@ -4,7 +4,7 @@ The CLI hardcodes `https://api.github.com` in two places, so GitHub Enterprise
 Server (GHES) installs cannot be served: `listen` validates tokens and polls
 `--until` state against public GitHub, and `setup` would create the org webhook
 on the wrong host. The server already reads `GH_BABYSITTER_GITHUB_API_URL`
-([server/config.py](../../src/gh_babysitter/server/config.py)); this design gives
+([server/config.py](../../../../src/gh_babysitter/server/config.py)); this design gives
 the CLI an equivalent, `gh`-compatible resolution path.
 
 ## Decisions
@@ -156,7 +156,7 @@ One atomic commit per row. Coverage must stay at or above ~95%.
 | 3 | `cli/test_listen.py`: GitHub client constructed with `base_url=options.api_url`, extending the factory-kwarg capture in `test_listen_github_client_keeps_finite_timeout` | `listen.py` |
 | 4 | `cli/test_setup.py`: with a GHES `api_url`, requests land on `https://github.acme.com/api/v3/orgs/acme/hooks` | `setup.py` |
 | 5 | `cli/test_main.py`: `--api-url` maps through; env reaches the command; existing `ListenOptions` and setup-kwargs assertions updated | `main.py` |
-| 6 | — | Precedence table into [05-cli.md](../specs/05-cli.md) under `## Конвенции флагов`, in Russian to match the file |
+| 6 | — | Precedence table into [cli spec](../../../specs/cli/spec.md) under `## Конвенции флагов`, in Russian to match the file |
 
 Because resolution happens at the Typer layer (as it already does for `--server`),
 the end-to-end guarantee is two linked facts: env → flag default in

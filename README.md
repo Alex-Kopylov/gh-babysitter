@@ -301,11 +301,17 @@ the secrets and skip this live job.
 
 ## Design documentation
 
-The design specifications remain in Russian:
+The design specifications live in [`openspec/specs/`](openspec/specs/) in the
+[OpenSpec](https://github.com/Fission-AI/OpenSpec) format and remain in
+Russian. Each capability has a `spec.md` (requirements) and, where useful, a
+`design.md` (context and rationale):
 
-1. [Architecture and data model](docs/specs/01-architecture.md)
-2. [Event delivery](docs/specs/02-delivery.md)
-3. [Authorization and security](docs/specs/03-auth.md)
-4. [GitHub webhook configuration](docs/specs/04-github-webhook.md)
-5. [CLI](docs/specs/05-cli.md)
-6. [ADR: GitHub App](docs/specs/06-github-app.md)
+1. [Event gateway — architecture and data model](openspec/specs/event-gateway/spec.md)
+2. [Event delivery](openspec/specs/event-delivery/spec.md)
+3. [Authorization and security](openspec/specs/authorization/spec.md)
+4. [GitHub webhook configuration](openspec/specs/github-webhook/spec.md)
+5. [CLI](openspec/specs/cli/spec.md)
+6. [ADR: GitHub App](openspec/specs/github-webhook/design.md#adr-github-app-вместо-org-webhook)
+
+Historical implementation plans are archived in
+[`openspec/changes/archive/`](openspec/changes/archive/).
