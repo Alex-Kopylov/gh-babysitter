@@ -1,6 +1,6 @@
 # Test-suite reorganization and coverage plan
 
-Follow-up to `2026-07-27-v1-release.md`. The suite grew 143 → 224 tests across four parallel
+Follow-up to [`2026-07-27-v1-release`](../2026-07-27-v1-release/design.md). The suite grew 143 → 224 tests across four parallel
 workstreams; nobody owned test architecture during that. This plan fixes structure and, more
 importantly, **power**.
 

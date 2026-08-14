@@ -38,7 +38,7 @@ shared quality gates without documenting the reason.
 ## Workflow
 
 - Prefer the existing `mise run` tasks before invoking tools directly.
-- Follow `docs/lint-strategy.md` for lint group placement and command
+- Follow `openspec/specs/linting/spec.md` for lint group placement and command
   selection.
 - Do not make lint or test tasks silently pass when configured paths are
   missing; restore the path or update the configuration instead.
