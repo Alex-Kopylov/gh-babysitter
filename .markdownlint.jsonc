@@ -9,11 +9,12 @@
   "default": true,
 
   // MD013: Line length
-  // Skip code blocks - they naturally have longer lines
-  // and wrapping would break their formatting
+  // Skip code blocks and tables - they naturally have longer lines
+  // and wrapping would break their formatting; tables cannot wrap at all
   "MD013": {
     "line_length": 80,
-    "code_blocks": false
+    "code_blocks": false,
+    "tables": false
   }
 
   // Uncomment to disable specific rules:
