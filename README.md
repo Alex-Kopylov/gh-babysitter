@@ -168,3 +168,7 @@ Design specifications (Russian):
 4. [GitHub webhook configuration](docs/specs/04-github-webhook.md)
 5. [CLI](docs/specs/05-cli.md)
 6. [ADR: GitHub App](docs/specs/06-github-app.md)
+
+## License
+
+[Apache-2.0](LICENSE)
