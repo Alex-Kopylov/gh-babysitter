@@ -19,11 +19,11 @@ jobs:
     env:
       GITHUB_TOKEN: ${{ github.token }}
     steps:
-      - uses: actions/checkout@v7.0.0
+      - uses: actions/checkout@v7.0.1
         with:
           fetch-depth: 0
           persist-credentials: false
-      - uses: jdx/mise-action@v4.2.0
+      - uses: jdx/mise-action@v4.2.5
         with:
           github_token: ${{ github.token }}
       - run: uv sync --all-extras --locked
@@ -34,10 +34,10 @@ jobs:
     env:
       GITHUB_TOKEN: ${{ github.token }}
     steps:
-      - uses: actions/checkout@v7.0.0
+      - uses: actions/checkout@v7.0.1
         with:
           persist-credentials: false
-      - uses: jdx/mise-action@v4.2.0
+      - uses: jdx/mise-action@v4.2.5
         with:
           github_token: ${{ github.token }}
       - run: uv sync --all-extras --locked
