@@ -233,6 +233,17 @@ Design specifications (Russian):
 5. [CLI](docs/specs/05-cli.md)
 6. [ADR: GitHub App](docs/specs/06-github-app.md)
 
+## Running tests
+
+Run `mise run test`, or `mise run test-cov` for coverage. Both commands run
+non-system tests in parallel, then run tests marked `system` serially in a
+separate pass. This keeps real-process timing assertions unchanged and avoids
+competition with other tests. Coverage combines both passes before applying
+the configured coverage threshold.
+
+Direct `uv run pytest` commands run serially by default. Use `-m 'not system'`
+with `-n auto` when running a parallel subset.
+
 ## License
 
 [Apache-2.0](LICENSE)

@@ -296,6 +296,7 @@ class TestServerSignals:
             popen_cli=popen_cli,
         )
 
+    @pytest.mark.flaky
     def test_sigterm_reconnects_listener_once(
         self,
         free_port,

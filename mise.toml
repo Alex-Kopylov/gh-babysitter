@@ -127,11 +127,17 @@ run = "mise exec -- typos"
 
 [tasks.test]
 description = "Run the pytest suite"
-run = "uv run pytest tests/"
+run = [
+  "uv run pytest tests/ -m 'not system' -n auto",
+  "uv run pytest tests/ -m system -n 0",
+]
 
 [tasks.test-cov]
 description = "Run the pytest suite with a coverage report"
-run = "uv run pytest tests/ --cov --cov-report=term-missing"
+run = [
+  "uv run pytest tests/ -m 'not system' -n auto --cov --cov-report= --cov-fail-under=0",
+  "uv run pytest tests/ -m system -n 0 --cov --cov-append --cov-report=term-missing",
+]
 
 [tasks.e2e]
 description = "Run the live GitHub E2E suite using the current environment"
