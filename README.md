@@ -83,6 +83,19 @@ gh-babysitter --help
 The examples below use `gh babysitter`. If you installed the Python command,
 use `gh-babysitter` instead.
 
+## Agent skill
+
+Install the [gh-babysitter skill](skills/gh-babysitter/SKILL.md) with
+[Skills CLI](https://github.com/vercel-labs/skills) (requires Node.js and npm):
+
+```console
+npx skills add Alex-Kopylov/gh-babysitter
+```
+
+Ask your agent to babysit a GitHub PR, monitor reviews and comments, or wait
+for approval or merge. The skill requires the CLI installation above and a
+configured server and webhook, as described below.
+
 ## Quickstart
 
 GitHub must reach your server at an HTTPS URL. Configure DNS and TLS first, so
