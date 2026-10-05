@@ -31,9 +31,14 @@ env -u GH_TOKEN -u GITHUB_TOKEN gh variable set E2E_SECONDARY_REPO \
     --repo "${CONFIG_REPO}" \
     --body "${GH_BABYSITTER_E2E_SECONDARY_REPO}"
 
-printf '%s' "${GH_TOKEN}" |
-    env -u GH_TOKEN -u GITHUB_TOKEN gh secret set E2E_PRIMARY_TOKEN --repo "${CONFIG_REPO}"
-printf '%s' "${GH_BABYSITTER_E2E_SECONDARY_TOKEN}" |
-    env -u GH_TOKEN -u GITHUB_TOKEN gh secret set E2E_SECONDARY_TOKEN --repo "${CONFIG_REPO}"
+# Dependabot-triggered runs read a separate secret store, so write both.
+for app in actions dependabot; do
+    printf '%s' "${GH_TOKEN}" |
+        env -u GH_TOKEN -u GITHUB_TOKEN gh secret set E2E_PRIMARY_TOKEN \
+            --app "${app}" --repo "${CONFIG_REPO}"
+    printf '%s' "${GH_BABYSITTER_E2E_SECONDARY_TOKEN}" |
+        env -u GH_TOKEN -u GITHUB_TOKEN gh secret set E2E_SECONDARY_TOKEN \
+            --app "${app}" --repo "${CONFIG_REPO}"
+done
 
-printf 'PASS configured Actions variables and encrypted secrets in %s\n' "${CONFIG_REPO}"
+printf 'PASS configured Actions and Dependabot secrets in %s\n' "${CONFIG_REPO}"
