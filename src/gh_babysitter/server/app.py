@@ -1,4 +1,4 @@
-"""FastAPI application for webhook ingress and SSE delivery."""
+"""Starlette application for webhook ingress and SSE delivery."""
 
 from __future__ import annotations
 
@@ -7,12 +7,14 @@ import json
 from contextlib import asynccontextmanager
 from dataclasses import asdict
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING, Annotated
+from typing import TYPE_CHECKING
 
 import httpx2
-from fastapi import FastAPI, HTTPException, Query, Request, Response
-from fastapi.responses import JSONResponse
 from sse_starlette.sse import EventSourceResponse
+from starlette.applications import Starlette
+from starlette.exceptions import HTTPException
+from starlette.responses import JSONResponse, Response
+from starlette.routing import Route
 
 from gh_babysitter.server.auth import Access, Authenticator, GitHubAuthenticator, Verdict
 from gh_babysitter.server.events import EVENT_MENU
@@ -22,6 +24,8 @@ from gh_babysitter.server.signature import verify_signature
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
+
+    from starlette.requests import Request
 
     from gh_babysitter.server.config import Settings
 
@@ -64,13 +68,23 @@ def _event_names(events: str) -> list[str]:
     return names
 
 
+def _int_or_none(value: str | None) -> int | None:
+    """Parse an optional integer query parameter."""
+    if value is None:
+        return None
+    try:
+        return int(value)
+    except ValueError:
+        raise HTTPException(status_code=422, detail="Invalid number") from None
+
+
 def _valid_repo(repo: str) -> bool:
     """Return whether a repository has the required ``owner/name`` shape."""
     return repo.count("/") == 1 and all(repo.split("/"))
 
 
 @asynccontextmanager
-async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
+async def _lifespan(app: Starlette) -> AsyncIterator[None]:
     """Own the default authenticator's HTTP client."""
     if app.state.authenticator is not None:
         yield
@@ -125,14 +139,22 @@ async def _webhook(request: Request) -> Response:
     )
 
 
-async def _stream(
-    request: Request,
-    repo: Annotated[str, Query()],
-    events: Annotated[str, Query()],
-    number: Annotated[int | None, Query()] = None,
-    action: Annotated[str | None, Query()] = None,
-) -> Response:
+def _http_error(_request: Request, exc: Exception) -> Response:
+    """Render HTTP errors as ``{"detail": ...}`` JSON, which the CLI reads."""
+    if not isinstance(exc, HTTPException):
+        raise exc
+    return JSONResponse({"detail": exc.detail}, status_code=exc.status_code, headers=exc.headers)
+
+
+async def _stream(request: Request) -> Response:
     """Open an authenticated SSE stream for the requested filters."""
+    query = request.query_params
+    repo = query.get("repo")
+    events = query.get("events")
+    if repo is None or events is None:
+        raise HTTPException(status_code=422, detail="repo and events are required")
+    number = _int_or_none(query.get("number"))
+    action = query.get("action")
     token = _bearer_token(request.headers.get("Authorization"))
     if not _valid_repo(repo):
         raise HTTPException(status_code=422, detail="Invalid repository")
@@ -191,12 +213,17 @@ def create_app(
     settings: Settings,
     registry: Registry | None = None,
     authenticator: Authenticator | None = None,
-) -> FastAPI:
+) -> Starlette:
     """Create the server application with optional test dependencies."""
-    app = FastAPI(lifespan=_lifespan)
+    app = Starlette(
+        routes=[
+            Route("/webhook", _webhook, methods=["POST"]),
+            Route("/events/stream", _stream, methods=["GET"]),
+        ],
+        exception_handlers={HTTPException: _http_error},
+        lifespan=_lifespan,
+    )
     app.state.settings = settings
     app.state.registry = registry or Registry()
     app.state.authenticator = authenticator
-    app.add_api_route("/webhook", _webhook, methods=["POST"])
-    app.add_api_route("/events/stream", _stream, methods=["GET"])
     return app

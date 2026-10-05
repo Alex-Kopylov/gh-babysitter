@@ -13,7 +13,7 @@ import anyio
 import anyio.lowlevel
 import httpx2
 import pytest
-from fastapi import FastAPI
+from starlette.applications import Starlette
 
 from gh_babysitter.server.app import create_app
 from gh_babysitter.server.auth import Access, Authenticator, Verdict
@@ -66,8 +66,8 @@ def server_settings() -> Callable[..., Settings]:
 
 
 @pytest.fixture
-def make_app(server_settings: Callable[..., Settings]) -> Callable[..., FastAPI]:
-    """Build the real FastAPI app with injected test dependencies."""
+def make_app(server_settings: Callable[..., Settings]) -> Callable[..., Starlette]:
+    """Build the real Starlette app with injected test dependencies."""
 
     def build(
         *,
@@ -75,7 +75,7 @@ def make_app(server_settings: Callable[..., Settings]) -> Callable[..., FastAPI]
         authenticator: Authenticator | None = None,
         settings: Settings | None = None,
         **settings_overrides: Any,
-    ) -> FastAPI:
+    ) -> Starlette:
         configured = settings or server_settings(**settings_overrides)
         return create_app(configured, registry=registry, authenticator=authenticator)
 
@@ -83,7 +83,7 @@ def make_app(server_settings: Callable[..., Settings]) -> Callable[..., FastAPI]
 
 
 @pytest.fixture
-def make_client(make_app: Callable[..., FastAPI]) -> Callable[..., httpx2.AsyncClient]:
+def make_client(make_app: Callable[..., Starlette]) -> Callable[..., httpx2.AsyncClient]:
     """Build an ASGI client against the real application."""
 
     def build(**app_options: Any) -> httpx2.AsyncClient:
@@ -101,7 +101,7 @@ def client_factory() -> Callable[..., Callable[..., httpx2.AsyncClient]]:
     """Build the CLI client factory for ASGI server and mocked GitHub calls."""
 
     def build(
-        app: FastAPI,
+        app: Starlette,
         github_handler: Callable[[httpx2.Request], httpx2.Response] | None = None,
     ) -> Callable[..., httpx2.AsyncClient]:
         def make(*, base_url: str, headers: dict[str, str], **kwargs: Any) -> httpx2.AsyncClient:
@@ -149,10 +149,10 @@ def webhook_headers(sign: Callable[[bytes], str]) -> Callable[..., dict[str, str
 @pytest.fixture
 def deliver(
     webhook_headers: Callable[..., dict[str, str]],
-) -> Callable[[FastAPI, str, dict[str, Any]], Awaitable[httpx2.Response]]:
+) -> Callable[[Starlette, str, dict[str, Any]], Awaitable[httpx2.Response]]:
     """Return a helper that delivers one signed webhook through ASGI."""
 
-    async def send(app: FastAPI, event: str, payload: dict[str, Any]) -> httpx2.Response:
+    async def send(app: Starlette, event: str, payload: dict[str, Any]) -> httpx2.Response:
         body = json.dumps(payload).encode()
         async with httpx2.AsyncClient(
             transport=httpx2.ASGITransport(app=app),
