@@ -57,20 +57,14 @@ to every client whose filter matches, over Server-Sent Events (SSE).
 
 ```mermaid
 sequenceDiagram
-    participant CLI as CLI (gh extension)
-    box FastAPI, one process
-        participant M as Matcher
-        participant I as Ingress
-    end
+    participant CLI as gh babysitter listen
+    participant S as gh-babysitter server
     participant GH as GitHub
 
-    CLI->>M: GET /events/stream?filters (auth = gh auth token)
-    Note over CLI,M: SSE connection stays open = subscription
-    GH->>I: POST /webhook + HMAC signature
-    I->>I: verify HMAC, normalize (event, action, number)
-    I->>M: normalized event
-    M->>M: match against in-memory subscriptions
-    M-->>CLI: SSE event (only if the filter matches)
+    CLI->>S: Subscribe with filters (SSE, gh auth token)
+    GH->>S: Webhook delivery
+    Note right of S: Verify HMAC, normalize,<br/>match subscriptions
+    S-->>CLI: Matching event (SSE)
 ```
 
 The server supports five event types: `issues`, `pull_request`,
