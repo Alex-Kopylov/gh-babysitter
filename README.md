@@ -1,5 +1,25 @@
 # gh-babysitter
 
+## TL;DR
+
+Speed up your AI agent's git workflow: stop polling GitHub and get events
+pushed to the agent the moment they happen.
+
+Run once to install the [gh-babysitter skill](skills/gh-babysitter/SKILL.md)
+with the [Skills CLI](https://github.com/vercel-labs/skills) (requires Node.js
+and npm):
+
+```console
+npx skills add --global --yes Alex-Kopylov/gh-babysitter
+```
+
+Then ask your agent: **"babysit my PR"** (or an issue). The skill sets itself up
+the first time you use it: it installs the CLI and configures the server and
+webhook, following the [setup reference](skills/gh-babysitter/reference/setup.md).
+To do this by hand, see [Install](#install) and [Quickstart](#quickstart).
+
+## What it is
+
 gh-babysitter streams filtered GitHub events to your command line. One webhook
 for your organization feeds one small server. Each client opens a
 `gh babysitter listen` stream with its own filter. You need no hook per
@@ -35,26 +55,36 @@ gh-babysitter puts one webhook in front of every client. The server checks the
 signature of each delivery and normalizes it. The server then pushes the event
 to every client whose filter matches, over Server-Sent Events (SSE).
 
-```text
-GitHub (one organization webhook, static event-type allowlist)
-   │  POST /webhook + HMAC signature
-   ▼
-┌────────────────── FastAPI, one process ────────────────────┐
-│  Ingress ── verify HMAC ── normalize(event, action, number)│
-│     │                                                       │
-│  Matcher ── in-memory subscription registry                │
-│     │           (= open SSE connections)                   │
-│  Dispatcher ── push to matching SSE connections            │
-└─────────────────────────────────────────────────────────────┘
-   ▲▼ GET /events/stream — filters in query parameters (SSE)
-   └────────── CLI (gh extension), auth = gh auth token ─────┘
+```mermaid
+sequenceDiagram
+    participant CLI as gh babysitter listen
+    participant S as gh-babysitter server
+    participant GH as GitHub
+
+    CLI->>S: Subscribe: repo + filters, gh auth token
+    S->>GH: Can this token read the repo?
+    alt No access
+        rect rgba(220, 60, 60, 0.12)
+            S-->>CLI: 403, subscription refused
+        end
+    else Access confirmed
+        rect rgba(40, 170, 90, 0.12)
+            S-->>CLI: SSE stream opens
+            GH->>S: Webhook delivery, HMAC-signed
+            Note right of S: Reject bad signatures,<br/>normalize, match filters
+            S-->>CLI: Matching events only
+            Note over CLI,GH: Every 5 min the server rechecks access<br/>and closes the stream if GitHub revoked it
+        end
+    end
 ```
 
 The server supports five event types: `issues`, `pull_request`,
 `issue_comment`, `pull_request_review`, and `release`.
 
-The server holds events and subscriptions in memory only. A subscription lives
-for exactly as long as its `listen` connection.
+The server is a single process with no database. Subscriptions and per-client
+event queues live in memory only. A subscription lives for exactly as long as
+its `listen` connection. The server does not scale horizontally; see
+[Known limitations](docs/limitations.md).
 
 ## Install
 
@@ -82,19 +112,6 @@ gh-babysitter --help
 
 The examples below use `gh babysitter`. If you installed the Python command,
 use `gh-babysitter` instead.
-
-## Agent skill
-
-Install the [gh-babysitter skill](skills/gh-babysitter/SKILL.md) with
-[Skills CLI](https://github.com/vercel-labs/skills) (requires Node.js and npm):
-
-```console
-npx skills add Alex-Kopylov/gh-babysitter
-```
-
-Ask your agent to babysit a GitHub PR, monitor reviews and comments, or wait
-for approval or merge. The skill requires the CLI installation above and a
-configured server and webhook, as described below.
 
 ## Quickstart
 
