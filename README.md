@@ -56,19 +56,21 @@ signature of each delivery and normalizes it. The server then pushes the event
 to every client whose filter matches, over Server-Sent Events (SSE).
 
 ```mermaid
-flowchart TB
-    GH["GitHub<br/>one organization webhook, static event-type allowlist"]
-    subgraph SRV["FastAPI, one process"]
-        direction TB
-        IN["Ingress<br/>verify HMAC, normalize<br/>(event, action, number)"]
-        M["Matcher<br/>in-memory subscription registry<br/>(= open SSE connections)"]
-        D["Dispatcher<br/>push to matching SSE connections"]
-        IN --> M --> D
+sequenceDiagram
+    participant CLI as CLI (gh extension)
+    box FastAPI, one process
+        participant M as Matcher
+        participant I as Ingress
     end
-    CLI["CLI (gh extension)<br/>auth = gh auth token"]
-    GH -->|"POST /webhook + HMAC signature"| IN
-    CLI -->|"GET /events/stream<br/>filters in query parameters"| M
-    D -.->|"SSE events"| CLI
+    participant GH as GitHub
+
+    CLI->>M: GET /events/stream?filters (auth = gh auth token)
+    Note over CLI,M: SSE connection stays open = subscription
+    GH->>I: POST /webhook + HMAC signature
+    I->>I: verify HMAC, normalize (event, action, number)
+    I->>M: normalized event
+    M->>M: match against in-memory subscriptions
+    M-->>CLI: SSE event (only if the filter matches)
 ```
 
 The server supports five event types: `issues`, `pull_request`,
