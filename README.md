@@ -61,17 +61,26 @@ sequenceDiagram
     participant S as gh-babysitter server
     participant GH as GitHub
 
-    CLI->>S: Subscribe with filters (SSE, gh auth token)
-    GH->>S: Webhook delivery
-    Note right of S: Verify HMAC, normalize,<br/>match subscriptions
-    S-->>CLI: Matching event (SSE)
+    CLI->>S: Subscribe: repo + filters, gh auth token
+    S->>GH: Can this token read the repo?
+    alt No access
+        S-->>CLI: 403, subscription refused
+    else Access confirmed
+        S-->>CLI: SSE stream opens
+        GH->>S: Webhook delivery, HMAC-signed
+        Note right of S: Reject bad signatures,<br/>normalize, match filters
+        S-->>CLI: Matching events only
+        Note over CLI,GH: Every 5 min the server rechecks access<br/>and closes the stream if GitHub revoked it
+    end
 ```
 
 The server supports five event types: `issues`, `pull_request`,
 `issue_comment`, `pull_request_review`, and `release`.
 
-The server holds events and subscriptions in memory only. A subscription lives
-for exactly as long as its `listen` connection.
+The server is a single process with no database. Subscriptions and per-client
+event queues live in memory only. A subscription lives for exactly as long as
+its `listen` connection. The server does not scale horizontally; see
+[Known limitations](docs/limitations.md).
 
 ## Install
 
