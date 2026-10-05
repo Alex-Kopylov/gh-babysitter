@@ -169,7 +169,7 @@ async def test_unavailable_recheck_stays_open_and_retries_within_thirty_seconds(
             "method": "GET",
             "path": "/events/stream",
             "headers": [(b"authorization", b"Bearer token")],
-            "query_string": b"",
+            "query_string": b"repo=octo/repo&events=release",
             "app": app,
         }
     )
@@ -183,7 +183,7 @@ async def test_unavailable_recheck_stays_open_and_retries_within_thirty_seconds(
 
     monkeypatch.setattr(app_module.asyncio, "wait_for", expire_immediately)
 
-    response = await _stream(request, repo="octo/repo", events="release")
+    response = await _stream(request)
     await anext(response.body_iterator)
     with pytest.raises(StopAsyncIteration):
         await anext(response.body_iterator)
@@ -314,11 +314,11 @@ class TestBurstOrdering:
                 "method": "GET",
                 "path": "/events/stream",
                 "headers": [(b"authorization", b"Bearer token")],
-                "query_string": b"",
+                "query_string": b"repo=octo/repo&events=issues",
                 "app": app,
             }
         )
-        stream = await _stream(request, repo="octo/repo", events="issues")
+        stream = await _stream(request)
         ready = await anext(stream.body_iterator)
 
         deliveries = [
@@ -366,12 +366,12 @@ class TestSubscriberFanOut:
                 "method": "GET",
                 "path": "/events/stream",
                 "headers": [(b"authorization", b"Bearer token")],
-                "query_string": b"",
+                "query_string": b"repo=octo/repo&events=issues",
                 "app": app,
             }
         )
-        first = await _stream(request, repo="octo/repo", events="issues")
-        second = await _stream(request, repo="octo/repo", events="issues")
+        first = await _stream(request)
+        second = await _stream(request)
         await anext(first.body_iterator)
         await anext(second.body_iterator)
 
@@ -566,11 +566,11 @@ async def test_stalled_listener_receives_exact_delivery_loss_count(
             "method": "GET",
             "path": "/events/stream",
             "headers": [(b"authorization", b"Bearer token")],
-            "query_string": b"",
+            "query_string": b"repo=octo/repo&events=issues",
             "app": app,
         }
     )
-    stream = await _stream(request, repo="octo/repo", events="issues")
+    stream = await _stream(request)
     ready = await anext(stream.body_iterator)
 
     deliveries = []
@@ -598,3 +598,19 @@ async def test_stalled_listener_receives_exact_delivery_loss_count(
     assert lag == {"event": "lag", "data": '{"dropped":4}'}
     assert "event" not in event
     assert registry.connections == {}
+
+
+@pytest.mark.parametrize(
+    ("params", "detail"),
+    [
+        ({"events": "issues"}, "repo and events are required"),
+        ({"repo": "octo/repo"}, "repo and events are required"),
+        ({"repo": "octo/repo", "events": "issues", "number": "x"}, "Invalid number"),
+    ],
+)
+async def test_stream_rejects_missing_or_malformed_query_params(make_client, fake_authenticator, params, detail):
+    async with make_client(authenticator=fake_authenticator) as client:
+        response = await client.get("/events/stream", params=params, headers={"Authorization": "Bearer token"})
+
+    assert response.status_code == 422
+    assert response.json() == {"detail": detail}

@@ -11,6 +11,7 @@ from typer.testing import CliRunner
 import gh_babysitter
 from gh_babysitter.cli import listen as listen_core
 from gh_babysitter.cli import main
+from gh_babysitter.server import main as server_main
 from tests.conftest import cli_text
 
 runner = CliRunner()
@@ -199,7 +200,7 @@ def test_setup_and_serve_commands_delegate(monkeypatch):
     setup_calls = []
     serve_calls = []
     monkeypatch.setattr(main, "setup_webhook", AsyncMock(side_effect=lambda **kwargs: setup_calls.append(kwargs)))
-    monkeypatch.setattr(main, "run_server", lambda host, port: serve_calls.append((host, port)))
+    monkeypatch.setattr(server_main, "run", lambda host, port: serve_calls.append((host, port)))
 
     setup_result = runner.invoke(
         main.app,

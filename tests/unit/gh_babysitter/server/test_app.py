@@ -1,7 +1,7 @@
-"""Unit tests for FastAPI application validation."""
+"""Unit tests for Starlette application validation."""
 
 import pytest
-from fastapi import HTTPException
+from starlette.exceptions import HTTPException
 
 from gh_babysitter.server.app import (
     _bearer_token,

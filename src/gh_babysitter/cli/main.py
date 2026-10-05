@@ -12,7 +12,6 @@ from gh_babysitter.cli.config import get_settings
 from gh_babysitter.cli.durations import parse_duration
 from gh_babysitter.cli.listen import ListenOptions, listen
 from gh_babysitter.cli.setup import setup_webhook
-from gh_babysitter.server.main import run as run_server
 
 app = typer.Typer(no_args_is_help=True)
 
@@ -117,6 +116,9 @@ def serve_command(
     port: Annotated[int, typer.Option("--port")] = 8000,
 ) -> None:
     """Run the gh-babysitter server."""
+    # Lazy: Server imports cost ~1.5 s and only `serve` needs them.
+    from gh_babysitter.server.main import run as run_server
+
     run_server(host, port)
 
 
