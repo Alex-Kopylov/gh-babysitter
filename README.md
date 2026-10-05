@@ -64,13 +64,17 @@ sequenceDiagram
     CLI->>S: Subscribe: repo + filters, gh auth token
     S->>GH: Can this token read the repo?
     alt No access
-        S-->>CLI: 403, subscription refused
+        rect rgba(220, 60, 60, 0.12)
+            S-->>CLI: 403, subscription refused
+        end
     else Access confirmed
-        S-->>CLI: SSE stream opens
-        GH->>S: Webhook delivery, HMAC-signed
-        Note right of S: Reject bad signatures,<br/>normalize, match filters
-        S-->>CLI: Matching events only
-        Note over CLI,GH: Every 5 min the server rechecks access<br/>and closes the stream if GitHub revoked it
+        rect rgba(40, 170, 90, 0.12)
+            S-->>CLI: SSE stream opens
+            GH->>S: Webhook delivery, HMAC-signed
+            Note right of S: Reject bad signatures,<br/>normalize, match filters
+            S-->>CLI: Matching events only
+            Note over CLI,GH: Every 5 min the server rechecks access<br/>and closes the stream if GitHub revoked it
+        end
     end
 ```
 
