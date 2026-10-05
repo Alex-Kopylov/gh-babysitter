@@ -58,9 +58,7 @@ to every client whose filter matches, over Server-Sent Events (SSE).
 ```mermaid
 sequenceDiagram
     participant CLI as gh babysitter listen
-    box Self-hosted
-        participant S as gh-babysitter server
-    end
+    participant S as gh-babysitter server
     participant GH as GitHub
 
     CLI->>S: Subscribe: repo + filters, gh auth token
