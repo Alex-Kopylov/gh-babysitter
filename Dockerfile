@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1.7
 
-FROM ghcr.io/astral-sh/uv:0.12.20-trixie-slim
+FROM ghcr.io/astral-sh/uv:0.12.23-trixie-slim
 
 WORKDIR /app
 
