@@ -45,7 +45,8 @@ GitHub must reach the server at an HTTPS URL, so configure DNS and TLS first.
 2. Start the server on a reachable interface:
 
    ```sh
-   gh babysitter serve --host 0.0.0.0 --port 8000 &
+   gh babysitter serve --host 0.0.0.0 --port 8000 \
+     > "${TMPDIR:-/tmp}/gh-babysitter.log" 2>&1 &
    ```
 
 3. Register the webhook with an org-admin token:

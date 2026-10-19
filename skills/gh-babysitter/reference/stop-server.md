@@ -4,7 +4,8 @@ Stop it only when the user explicitly asks.
 
 `gh babysitter serve` can run as `gh`, then `uv`, then `python`. Killing the
 PID from `$!` stops only `gh` and leaves the server running. Find the process
-that listens on the port instead:
+that listens on the port instead. `8000` is the default; use the port the
+server was started on (the one in `$GH_BABYSITTER_SERVER` when it is set):
 
 ```sh
 pid="$(lsof -tiTCP:8000 -sTCP:LISTEN)"
