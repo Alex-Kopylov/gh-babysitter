@@ -21,8 +21,8 @@ curl -sS -o /dev/null -w 'HTTP %{http_code}\n' --max-time 2 \
   "$server/events/stream"
 ```
 
-On `HTTP 000`, start a local one with
-`gh babysitter serve --host 127.0.0.1 --port 8000 &`.
+On `HTTP 000`, start a local one as
+[reference/start-server.md](reference/start-server.md) describes.
 
 Read [reference/setup.md](reference/setup.md) when the extension is missing, the
 server stays unreachable, no event ever arrives, or the user asks about the
@@ -77,8 +77,11 @@ schema and how to reach what the stream omits.
 
 Keep every wait, retries included, inside the budget. Stop the listener when the
 target is reached, the PR closes without merging, the budget expires, or user
-action is required; leave no orphan process and do not claim monitoring
+action is required; leave no orphan listener and do not claim monitoring
 continues after it stops.
+
+Leave the server running. Stop it only when the user explicitly asks, as
+[reference/stop-server.md](reference/stop-server.md) describes.
 
 Exit `0` means the configured condition was met and `124` means the timeout
 expired; treat anything else as failure and check
